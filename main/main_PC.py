@@ -23,7 +23,7 @@ def clip(num, min_val, max_val):
 class ReactorCore:
     
     def __init__(self):
-        self.rods_pos = 1.0  # Rods position in percents, 1 is full out (full power), 0 is full in (zero power)
+        self.rods_pos = 0.0  # Rods position in percents, 1 is full out (full power), 0 is full in (zero power)
         self.initial_power = 0.0  # kW
         self.y0 = [self.initial_power] + [1.0] * 6  # Power + 6 precursor groups
         self.beta = 0.0065  # For U-235
