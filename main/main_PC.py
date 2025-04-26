@@ -227,9 +227,8 @@ class ReactorSystems:
         self.eq_k = 0.7  # How fast pressure and temperature equalise, e.g. when vlvA_main is opened
 
         # Pressure (average), kPa:
-        self.press_ambient = 101.325
-        self.pressA_1_default = self.press_ambient  # Standard atmospheric pressure
-        self.pressA_1 = self.pressA_1_default  # Pressure at core (first loop)
+        self.press_ambient = 101.325  # Standard atmospheric pressure
+        self.pressA_1 = self.press_ambient  # Pressure at core (first loop)
         self.pressA_2 = self.press_ambient  # Pressure at steam generator (first loop)
         self.pressA_3 = self.press_ambient  # Pressure at pressuriser (first loop)
         self.pressB_1 = self.press_ambient  # Pressure before turbine (second loop)
@@ -283,11 +282,11 @@ class ReactorSystems:
 
         # Pumps:
         self.pumpA = False
-        self.pumpA_speed = 12  # m^3/s
+        self.pumpA_nom_speed = 12  # Nominal speed of pumpA, m^3/s
         self.pumpB = False
-        self.pumpB_speed = 15  # m^3/s
+        self.pumpB_nom_speed = 15  # Nominal speed of pumpB, m^3/s
         self.pumpA_4 = False  # Pump to fill reserve water tank
-        self.pumpA_4_speed = 5  # m^3/s
+        self.pumpA_4_nom_speed = 5  # Nominal speed of pumpA_4, m^3/s
 
         # Volumes of tanks, m^3:
         self.VOLUME_A_1 = 40.0  # Volume of first part of first loop
@@ -412,12 +411,13 @@ class ReactorSystems:
         return press
 
     # SUGGESTIONS:
-    # Replace self.pumpA_speed -> self.pumpA_nom_speed  # Nominal speed of pumpA
-    # Replace self.pumpB_speed -> self.pumpB_nom_speed  # Nominal speed of pumpB
     # If meltdown occurs, lock the position of rods by not allowing them to change
-    # Check if self.pressA_1_default is needed anymore
     # If pump is off, flow should be 0
     # Review catastrophe_log messages to make sure they fit display
+    # Add A_3 power heating
+    # Add A_3 volume calculation using self.pressA_3_default, like for A_1
+    # Improve catch_out_of_range() to handle values over maximum, not only minimum
+    # Fix pressure skyrocketing if time_step is greater than 1.0
 
     def simulate_systems(self, power):
         """
@@ -498,14 +498,14 @@ class ReactorSystems:
                 if self.pumpA:
 
                     self.delay_count_pumpA += 1
-                    self.flowA += self.pumpA_speed / self.delay_pumpA
+                    self.flowA += self.pumpA_nom_speed / self.delay_pumpA
                     if self.delay_count_pumpA >= self.delay_pumpA:
                         self.marker_pumpA = True
 
                 elif self.pumpA == False:
 
                     self.delay_count_pumpA -= 1
-                    self.flowA -= self.pumpA_speed / self.delay_pumpA
+                    self.flowA -= self.pumpA_nom_speed / self.delay_pumpA
                     if self.delay_count_pumpA <= 0:
                         self.marker_pumpA = False
 
@@ -518,14 +518,14 @@ class ReactorSystems:
 
                 if self.pumpA:
                     self.delay_count_pumpA += 1
-                    self.pressA_1 += 50  # Small pressure change
-                    self.pressA_2 -= 50
+                    self.pressA_1 += 20  # Small pressure change
+                    self.pressA_2 -= 20
                     if self.delay_count_pumpA >= self.delay_pumpA:  # Use >= to be safe
                         self.marker_pumpA = True
                 else:
                     self.delay_count_pumpA -= 1
-                    self.pressA_1 -= 50
-                    self.pressA_2 += 50
+                    self.pressA_1 -= 20
+                    self.pressA_2 += 20
                     if self.delay_count_pumpA <= 0:  # Use <= to be safe
                         self.marker_pumpA = False
 
@@ -557,7 +557,7 @@ class ReactorSystems:
                 P_max_transfer = P_generated * normalized_diff
                 
                 # Actual heat transfer limited by flow capacity
-                P_flow_limit = self.flowA / self.pumpA_speed * P_generated * normalized_diff
+                P_flow_limit = self.flowA / self.pumpA_nom_speed * P_generated * normalized_diff
                 
                 # Use the smaller of the two limits
                 P_removed = min(P_max_transfer, P_flow_limit)
@@ -637,14 +637,14 @@ class ReactorSystems:
                 if self.pumpB and self.vlvB_main and self.vlvB_2:
 
                     self.delay_count_pumpB += 1
-                    self.flowB += self.pumpB_speed / self.delay_pumpB  # pumpB gives 15 m^3/s at max power
+                    self.flowB += self.pumpB_nom_speed / self.delay_pumpB  # pumpB gives 15 m^3/s at max power
                     if self.delay_count_pumpB >= self.delay_pumpB:
                         self.marker_pumpB = True
 
                 elif self.pumpB == False:
 
                     self.delay_count_pumpB -= 1
-                    self.flowB -= self.pumpB_speed / self.delay_pumpB
+                    self.flowB -= self.pumpB_nom_speed / self.delay_pumpB
                     if self.delay_count_pumpB <= 0:
                         self.marker_pumpB = False
 
@@ -733,20 +733,20 @@ class ReactorSystems:
                         delay_count_pumpA_4 += 1
 
                         # Should create gradual change in flow
-                        self.flow_from_A_4 += self.pumpA_4_speed / self.delay_pumpA_4
+                        self.flow_from_A_4 += self.pumpA_4_nom_speed / self.delay_pumpA_4
                         if delay_count_pumpA_4 >= self.delay_pumpA_4:
                             self.marker_pumpA_4 = True
 
                     elif self.pumpA_4 == False:
 
                         delay_count_pumpA_4 -= 1
-                        self.flowA -= self.pumpA_4_speed / self.delay_pumpA_4
+                        self.flowA -= self.pumpA_4_nom_speed / self.delay_pumpA_4
                         if self.delay_count_pumpA <= 0:
                             self.marker_pumpA = False
 
                 dV_in = self.flow_to_A_4 * self.time_step
                 if self.volA_4 <= self.VOLUME_A_4 + dV_in and self.pumpA_4:
-                    self.flow_to_A_4 = self.pumpA_4_speed
+                    self.flow_to_A_4 = self.pumpA_4_nom_speed
                     self.volA_4 += dV_in  # Reserve tank filled from lake
 
     def update_relief(self):
@@ -785,6 +785,13 @@ class ReactorSystems:
         # Empty relief tank
         if self.vlv_empty_relief:
             self.vol_relief -= self.MAX_RELIEF_FLOW * self.time_step * self.vol_relief / self.VOLUME_RELIEF
+
+    # def autopilot(self):
+    #     """
+    #     Autopilot to launch and control all systems, except for core
+
+    #     Action sequence in case of cold startup
+    #     """
 
     def overpressure_A_1(self):
         """
@@ -976,7 +983,7 @@ def main():
 
         sys.simulate_systems(power)
 
-        core.autopilot(500)
+        core.autopilot(1000)
         core.check_SCRAM(cond_on=sys.temp_core > 900, cond_off=sys.temp_core < 750)
         print(f"Pow: {power:.3f}")
         print(f"T_core: {sys.temp_core:.3f}")
@@ -984,10 +991,12 @@ def main():
 
         time_now += 1
 
-        if sys.tempA_1 < 100:
-            sleep(0.01)
-        else:
-            sleep(0.5)
+        dt = 1.0
+
+        core.time_step = dt
+        sys.time_step = dt
+
+        sleep(0.1)
 
 if __name__ == "__main__":
     main()
