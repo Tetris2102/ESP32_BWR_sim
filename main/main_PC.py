@@ -245,6 +245,10 @@ class ReactorSystems:
         # self.tempB_3 = self.temp_ambient  # Temperature after condenser (second loop)  # No B_3, B_2 used instead
         self.temp_core = self.temp_ambient  # Temperature of core, C
 
+        # Pressuriser heater power, kW
+        self.powerA_3_nom = 50.0
+        self.powerA_3 = 0.0
+
         # Water flow, m^3/s:
         self.flowA = 0.0  # Flow through main valve of first loop
         self.flowB = 0.0  # Flow through main valve of second loop
@@ -412,11 +416,6 @@ class ReactorSystems:
 
     # SUGGESTIONS:
     # If meltdown occurs, lock the position of rods by not allowing them to change
-    # If pump is off, flow should be 0
-    # Review catastrophe_log messages to make sure they fit display
-    # Add A_3 power heating
-    # Add A_3 volume calculation using self.pressA_3_default, like for A_1
-    # Improve catch_out_of_range() to handle values over maximum, not only minimum
     # Fix pressure skyrocketing if time_step is greater than 1.0
 
     def simulate_systems(self, power):
@@ -435,7 +434,6 @@ class ReactorSystems:
         self.update_turbine()
         self.update_relief()
         self.update_reserve()
-        self.catch_out_of_range()
 
     def update_A(self):
         """
@@ -459,6 +457,11 @@ class ReactorSystems:
         self.pressA_1 += self.eq_k * (pressA_1 - self.pressA_1)
         self.pressA_2 += self.eq_k * (pressA_2 - self.pressA_2)
         self.pressA_3 += self.eq_k * (pressA_3 - self.pressA_3)
+
+        # Update temperature at pressuriser
+        if self.powerA_3 > 0.0:
+            tempA_3 = 1000 * self.powerA_3 * self.time_step / (self.volA_3 * self.WATER_DENSITY * self.HEAT_CAPACITY_WATER)
+            self.tempA_3 += self.eq_k * (tempA_3 - self.tempA_3)
 
         # Equalise pressures between A_3 and A_1
         if self.vlvA_3:
@@ -914,54 +917,6 @@ class ReactorSystems:
 
                 self.flowA = 0
 
-    def catch_out_of_range(self):
-        """
-        Manages out of range variables, e.g. self.tempA_1 below self.temp_ambient
-        Ideally this should not be needed
-        """
-
-        if self.tempA_1 < self.temp_ambient:
-            self.tempA_1 = self.temp_ambient
-
-        if self.temp_core < self.temp_ambient:
-            self.temp_core = self.temp_ambient
-
-        if self.tempA_2 < self.temp_ambient:
-            self.tempA_2 = self.temp_ambient
-
-        if self.tempA_3 < self.temp_ambient:
-            self.tempA_3 = self.temp_ambient
-
-        if self.tempB_1 < self.temp_ambient:
-            self.tempB_1 = self.temp_ambient
-
-        if self.tempB_2 < self.temp_ambient:
-            self.tempB_2 = self.temp_ambient
-
-        if self.pressA_1 < self.press_ambient:
-            self.pressA_1 = self.press_ambient
-
-        if self.pressA_2 < self.press_ambient:
-            self.pressA_2 = self.press_ambient
-
-        if self.pressA_3 < self.press_ambient:
-            self.pressA_3 = self.press_ambient
-
-        if self.pressB_1 < self.press_ambient:
-            self.pressB_1 = self.press_ambient
-
-        if self.pressB_2 < self.press_ambient:
-            self.pressB_2 = self.press_ambient
-
-        if self.volA_1 > self.VOLUME_A_1:
-            self.volA_1 = self.VOLUME_A_1
-
-        if self.volA_2 > self.VOLUME_A_2:
-            self.volA_2 = self.VOLUME_A_2
-
-        if self.volA_4 > self.VOLUME_A_4:
-            self.volA_4 = self.VOLUME_A_4
-
 
 def main():
 
@@ -973,7 +928,7 @@ def main():
     core.initial_power = 10
 
     sys.vlvA_main = True
-    sys.pumpA = True
+    sys.pumpA = False
 
     time_now = 0
 
@@ -988,6 +943,7 @@ def main():
         print(f"Pow: {power:.3f}")
         print(f"T_core: {sys.temp_core:.3f}")
         print(f"P_A_1: {sys.pressA_1:.3f}")
+        print(f"Flw_A: {sys.flowA:.3f}")
 
         time_now += 1
 
