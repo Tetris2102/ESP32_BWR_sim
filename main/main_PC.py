@@ -417,6 +417,10 @@ class ReactorSystems:
     # SUGGESTIONS:
     # If meltdown occurs, lock the position of rods by not allowing them to change
     # Fix pressure skyrocketing if time_step is greater than 1.0
+    # Check if turbine does not rotate and heat does not transfer through it when flowB == 0
+    # Implement valves opening slowly (not momentarily), maybe using the same mechanics as pumps
+    # Modify the autopilot() function to use pressuriser, check for and react to faults and failures (when they will be added)
+    # Add faults and failures
 
     def simulate_systems(self, power):
         """
@@ -460,8 +464,12 @@ class ReactorSystems:
 
         # Update temperature at pressuriser
         if self.powerA_3 > 0.0:
-            tempA_3 = 1000 * self.powerA_3 * self.time_step / (self.volA_3 * self.WATER_DENSITY * self.HEAT_CAPACITY_WATER)
-            self.tempA_3 += self.eq_k * (tempA_3 - self.tempA_3)
+
+            if self.tempA_3 < 500:
+                tempA_3 = 1000 * self.powerA_3 * self.time_step / (self.volA_3 * self.WATER_DENSITY * self.HEAT_CAPACITY_WATER)
+                self.tempA_3 += self.eq_k * (tempA_3 - self.tempA_3)
+            else:
+                self.tempA_3 = 500
 
         # Equalise pressures between A_3 and A_1
         if self.vlvA_3:
@@ -511,6 +519,11 @@ class ReactorSystems:
                     self.flowA -= self.pumpA_nom_speed / self.delay_pumpA
                     if self.delay_count_pumpA <= 0:
                         self.marker_pumpA = False
+
+            # Check if there is enough coolant to allow flow
+            if self.flowA > 0:
+                if self.volA_1 < 0.5 * self.VOLUME_A_1:
+                    self.flowA = 0  # No need for gradual change since flow stops momentarily if there is not enough coolant
 
         else:
 
@@ -701,6 +714,10 @@ class ReactorSystems:
 
             self.turbine_power += increment
 
+        else:
+
+            self.flowB = 0
+
     def update_reserve(self):
         """
         Updates reserve cooling tank for loop A
@@ -789,12 +806,36 @@ class ReactorSystems:
         if self.vlv_empty_relief:
             self.vol_relief -= self.MAX_RELIEF_FLOW * self.time_step * self.vol_relief / self.VOLUME_RELIEF
 
-    # def autopilot(self):
-    #     """
-    #     Autopilot to launch and control all systems, except for core
+    def autopilot(self):
+        """
+        Autopilot to launch and control all systems, except for core
+        FOR NOW VERY SIMPLIFIED
 
-    #     Action sequence in case of cold startup
-    #     """
+        Action sequence in case of cold startup:
+        1. Check if power > 0
+        2. Open vlvA_main
+        3. Launch pumpA
+        4. Check if loop A is heated enough
+        5. Open vlvB_main
+        6. Open vlvB_2
+        7. Launch pumpB
+
+        + safety checks and procedures for failures
+        """
+
+        if power > 0:
+            self.vlvA_main = True
+            # Add delay, maybe like with pumps
+            self.pumpA = True
+
+            if self.tempA_2 > 150:
+
+                self.vlvB_main = True
+                self.vlvB_2 = True
+
+                if self.pressB_1 > 1000:
+
+                    self.pumpB = True
 
     def overpressure_A_1(self):
         """
