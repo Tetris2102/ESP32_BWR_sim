@@ -1,6 +1,6 @@
 from lcd_i2c import LCD
 from machine import SoftI2C, Pin
-from time import sleep, sleep_ms, time
+from time import sleep, sleep_ms, sleep_us, time
 
 def mean(list):
     """Computes mean of a list"""
@@ -59,7 +59,7 @@ class ReactorCore:
         if len(self.power_history) > 3:
             dp_dt = (self.power_history[3] - self.power_history[2]) / self.time_step
         else:
-            return "inf"
+            return ">2000"
 
         if self.power > 0.0 and dp_dt > 1e-4:
             e = 2.7183
@@ -67,7 +67,7 @@ class ReactorCore:
             if period < 2000:
                 return period
 
-        return "inf"
+        return ">2000"
 
     def point_kinetics_full(self, t, y):
         """Full point kinetics equations for a U-235 reactor with multiple precursor groups."""
@@ -162,7 +162,7 @@ class ReactorCore:
         self.rods_pos = clip(self.rods_pos, 0.0, 1.0)
     
     def move_rods(self, goal_rods_pos):
-        """Moves rods gradually and prevents movement in case of SCRAM"""
+        """Gradually moves rods"""
 
         if goal_rods_pos >= 0 and goal_rods_pos <= 1:
             self.increment_rods(goal_rods_pos)
@@ -241,13 +241,12 @@ class ReactorSystems:
         self.tempA_2 = self.temp_ambient  # Temperature at steam generator (first loop)
         self.tempA_3 = self.temp_ambient  # Temperature at pressuriser (first loop)
         self.tempB_1 = self.temp_ambient  # Temperature before turbine (second loop)
-        self.tempB_2 = self.temp_ambient  # Temperature after turnine (second loop)
-        # self.tempB_3 = self.temp_ambient  # Temperature after condenser (second loop)  # No B_3, B_2 used instead
+        self.tempB_2 = self.temp_ambient  # Temperature after turbine (second loop)
         self.temp_core = self.temp_ambient  # Temperature of core, C
 
         # Pressuriser heater power, kW
         self.powerA_3_nom = 50.0
-        self.powerA_3 = 0.0
+        self.powerA_3 = False
 
         # Water flow, m^3/s:
         self.flowA = 0.0  # Flow through main valve of first loop
@@ -289,8 +288,8 @@ class ReactorSystems:
         self.pumpA_nom_speed = 12  # Nominal speed of pumpA, m^3/s
         self.pumpB = False
         self.pumpB_nom_speed = 15  # Nominal speed of pumpB, m^3/s
-        self.pumpA_4 = False  # Pump to fill reserve water tank
-        self.pumpA_4_nom_speed = 5  # Nominal speed of pumpA_4, m^3/s
+        self.pumpB_4 = False  # Pump to fill reserve water tank
+        self.pumpB_4_nom_speed = 5  # Nominal speed of pumpB_4, m^3/s
 
         # Volumes of tanks, m^3:
         self.VOLUME_A_1 = 40.0  # Volume of first part of first loop
@@ -329,15 +328,20 @@ class ReactorSystems:
         # Memory values:
         self.delay_pressA_3 = 0  # Used to create smooth equalisation of pressures between
                                  # the first loop and pressuriser
-        self.delay_pumpA = 4.0 / self.time_step  # How many function calls are required to fully launch pump in 4 seconds
-        self.delay_pumpB = 4.0 / self.time_step
-        self.delay_pumpA_4 = 2.0 / self.time_step
+        self.delay_pumpA = 15.0 / self.time_step  # How many function calls are required to fully launch pump in 4 seconds
+        self.delay_pumpB = 15.0 / self.time_step
+        self.delay_pumpB_4 = 8.0 / self.time_step
         self.marker_pumpA = self.pumpA  # Used to track shutdown of pumps
         self.marker_pumpB = self.pumpB
-        self.marker_pumpA_4 = self.pumpA_4
+        self.marker_pumpB_4 = self.pumpB_4
         self.delay_count_pumpA = 0  # Are used to manage pump launching
         self.delay_count_pumpB = 0
-        self.delay_count_pumpA_4 = 0
+        self.delay_count_pumpB_4 = 0
+        # self.delay_valve = 10.0 / self.time_step  # Full opening or closing time for any valve
+        # self.delay_count_valves = [0] * 8
+        # self.valves = [self.vlvA_main, self.vlvA_3, self.vlvA_4, self.vlvA_relief, self.vlvB_main,
+        #     self.vlvB_2, self.vlvB_4, self.vlvB_relief]
+        # self.marker_valves = self.valves  # Is used to check for valve opening
 
         # Faults:
         self.A_OP = False  # First loop overpressure, pressure loss
@@ -415,10 +419,12 @@ class ReactorSystems:
         return press
 
     # SUGGESTIONS:
-    # If meltdown occurs, lock the position of rods by not allowing them to change
-    # Fix pressure skyrocketing if time_step is greater than 1.0
+    # If meltdown occurs, lock the position of rods by not allowing them to change - should be done in the main loop
+    # Fix pressure skyrocketing if time_step is greater than 1.0 -
+    #     occurs because simulation accuracy rapidly decreases when time_step increases
     # Check if turbine does not rotate and heat does not transfer through it when flowB == 0
-    # Implement valves opening slowly (not momentarily), maybe using the same mechanics as pumps
+    # Implement valves opening slowly (not momentarily), maybe using the same mechanics as pumps - 
+    #     should be implemented in main loop with simple delay
     # Modify the autopilot() function to use pressuriser, check for and react to faults and failures (when they will be added)
     # Add faults and failures
 
@@ -452,6 +458,15 @@ class ReactorSystems:
             pressA_1 = self.pressure(self.tempA_1, self.volA_1, self.VOLUME_A_1)
             pressA_2 = self.pressure(self.tempA_2, self.volA_2, self.VOLUME_A_2)
 
+        # Update temperature at pressuriser
+        if self.powerA_3:
+
+            if self.tempA_3 < 500:
+                tempA_3 = 1000 * self.powerA_3_nom * self.time_step / (self.volA_3 * self.WATER_DENSITY * self.HEAT_CAPACITY_WATER)
+                self.tempA_3 += self.eq_k * (tempA_3 - self.tempA_3)
+            else:
+                self.tempA_3 = 500
+
         # Update pressure at pressuriser
         if self.vlvA_3:
             pressA_3 = self.pressure(self.tempA_3, self.volA_3, self.VOLUME_A_3 + self.VOLUME_A_1)
@@ -461,15 +476,6 @@ class ReactorSystems:
         self.pressA_1 += self.eq_k * (pressA_1 - self.pressA_1)
         self.pressA_2 += self.eq_k * (pressA_2 - self.pressA_2)
         self.pressA_3 += self.eq_k * (pressA_3 - self.pressA_3)
-
-        # Update temperature at pressuriser
-        if self.powerA_3 > 0.0:
-
-            if self.tempA_3 < 500:
-                tempA_3 = 1000 * self.powerA_3 * self.time_step / (self.volA_3 * self.WATER_DENSITY * self.HEAT_CAPACITY_WATER)
-                self.tempA_3 += self.eq_k * (tempA_3 - self.tempA_3)
-            else:
-                self.tempA_3 = 500
 
         # Equalise pressures between A_3 and A_1
         if self.vlvA_3:
@@ -484,7 +490,7 @@ class ReactorSystems:
             # Equalise pressures between A_1 and A_2
             if not self.pressA_1 == self.pressA_2:
                 press1 = self.compute_equalised_press(self.pressA_1, self.volA_1, self.pressA_2, self.volA_2)
-                # This should be smooth, 0.7 is a guess, ADJUST
+                # This should be smooth, eq_k is a guess, ADJUST
                 self.pressA_1 += self.eq_k * (press1 - self.pressA_1)
                 self.pressA_2 += self.eq_k * (press1 - self.pressA_2)
 
@@ -492,14 +498,14 @@ class ReactorSystems:
             w1 = self.volA_1 / (self.volA_1 + self.volA_2)
             w2 = self.volA_2 / (self.volA_1 + self.volA_2)
             temp1 = (w1 * self.tempA_1 + w2 * self.tempA_2)
-            # This should be smooth, 0.7 is a guess, ADJUST
+            # This should be smooth, eq_k is a guess, ADJUST
             self.tempA_1 += self.eq_k * (temp1 - self.tempA_1)
             self.tempA_2 += self.eq_k * (temp1 - self.tempA_2)
 
             # Equalise volume of coolant
             if not (self.volA_1 == self.volA_1_default or self.volA_2 == self.volA_2_default):
                 v1 = (self.volA_1 + self.volA_2) / 2
-                # This should be smooth, 0.7 is a guess, ADJUST
+                # This should be smooth, eq_k is a guess, ADJUST
                 self.volA_1 += self.eq_k * (v1 - self.volA_1)
                 self.volA_2 += self.eq_k * (v1 - self.volA_2)
             
@@ -630,12 +636,26 @@ class ReactorSystems:
             self.tempB_1 += 0.8 * dT  # 80% efficiency of intended heat transfer
             self.tempA_2 -= 0.8 * dT
         else:
-            self.tempB_1 += 0.2 * dT  # 20 % efficiency of unintended heat transfer
-            self.tempA_2 -= 0.2 * dT
+            self.tempB_1 += 0.1 * dT  # 10 % efficiency of unintended heat transfer
+            self.tempA_2 -= 0.1 * dT
 
         # No flow if either valve closed or pump off
         if not (self.vlvB_main or self.vlvB_2 or self.pumpB):
             self.flowB = 0
+
+        if self.vlvB_main:
+            pressB_1 = self.pressure(self.tempB_1, self.volB_1, self.VOLUME_B)
+        else:
+            pressB_1 = self.pressure(self.tempB_1, self.volB_1, self.VOLUME_B_1)
+
+        if self.vlvB_2:
+            pressB_2 = self.pressure(self.tempB_2, self.volB_2, self.VOLUME_B)
+        else:
+            pressB_2 = self.pressure(self.tempB_2, self.volB_2, self.VOLUME_B_2)
+
+        # Calculate pressure in B_1 and B_2
+        self.pressB_1 = self.eq_k * (pressB_1 - self.pressB_1)
+        self.pressB_2 = self.eq_k * (pressB_2 - self.pressB_2)
 
         if self.vlvB_main and self.vlvB_2:
 
@@ -644,7 +664,7 @@ class ReactorSystems:
             # Equalise volume of coolant
             if not (self.volB_1 == self.volB_1_default or self.volB_2 == self.volB_2_default):
                 v1 = (self.volB_1 + self.volB_2) / 2
-                # This should be smooth, 0.7 is a guess, ADJUST
+                # This should be smooth, eq_k is a guess, ADJUST
                 self.volB_1 += self.eq_k * (v1 - self.volB_1)
                 self.volB_2 += self.eq_k * (v1 - self.volB_2)
 
@@ -714,6 +734,9 @@ class ReactorSystems:
 
             self.turbine_power += increment
 
+            self.tempB_2 = self.eq_k * (self.tempB_1 - self.tempB_2)
+            self.pressB_2 = self.eq_k * (self.pressB_1 - self.pressB_2) * (self.VOLUME_B_2 / self.VOLUME_B)
+
         else:
 
             self.flowB = 0
@@ -744,29 +767,29 @@ class ReactorSystems:
                 self.flow_4 = 0
 
             # Simple level change based on flows
-            if self.pumpA_4 and self.vlvB_4:
+            if self.pumpB_4 and self.vlvB_4:
 
-                # Launch or stop pumpA_4
-                if not self.marker_pumpA_4 == self.pumpA_4:
+                # Launch or stop pumpB_4
+                if not self.marker_pumpB_4 == self.pumpB_4:
 
-                    if self.pumpA_4:
-                        delay_count_pumpA_4 += 1
+                    if self.pumpB_4:
+                        self.delay_count_pumpB_4 += 1
 
                         # Should create gradual change in flow
-                        self.flow_from_A_4 += self.pumpA_4_nom_speed / self.delay_pumpA_4
-                        if delay_count_pumpA_4 >= self.delay_pumpA_4:
-                            self.marker_pumpA_4 = True
+                        self.flow_from_A_4 += self.pumpB_4_nom_speed / self.delay_pumpB_4
+                        if delay_count_pumpB_4 >= self.delay_pumpB_4:
+                            self.marker_pumpB_4 = True
 
-                    elif self.pumpA_4 == False:
+                    elif self.pumpB_4 == False:
 
-                        delay_count_pumpA_4 -= 1
-                        self.flowA -= self.pumpA_4_nom_speed / self.delay_pumpA_4
+                        delay_count_pumpB_4 -= 1
+                        self.flowA -= self.pumpB_4_nom_speed / self.delay_pumpB_4
                         if self.delay_count_pumpA <= 0:
                             self.marker_pumpA = False
 
                 dV_in = self.flow_to_A_4 * self.time_step
-                if self.volA_4 <= self.VOLUME_A_4 + dV_in and self.pumpA_4:
-                    self.flow_to_A_4 = self.pumpA_4_nom_speed
+                if self.volA_4 <= self.VOLUME_A_4 + dV_in and self.pumpB_4:
+                    self.flow_to_A_4 = self.pumpB_4_nom_speed
                     self.volA_4 += dV_in  # Reserve tank filled from lake
 
     def update_relief(self):
@@ -966,7 +989,11 @@ def print_vals_2004(lcd: object, vals: list):
     if len(vals) > 8:
         raise Exception("List too long to print out")
     
-    lcd.clear()  # Clear display before printing new values
+    # lcd.clear()
+    # Maybe printing spaces is faster
+    lcd.set_cursor(0, 0)
+    lcd.print(80 * ' ')
+    lcd.set_cursor(0, 0)
     
     for i in range(len(vals)):
         if i < 4:
@@ -981,127 +1008,399 @@ def format_float(num, symbols=4):
     Formats float to have the specified number of characters (for display management)
     """
     if isinstance(num, float):
-        s = str(round(num, symbols - len(str(int(num))) - 1))  # More reliable rounding
+        s = str(round(num, symbols - len(str(int(num))) - 1))
         return s[:symbols] if len(s) > symbols else s
     return str(num)[:symbols]
 
 # 2004 LCD setup
 scl_2004 = Pin(18)
 sda_2004 = Pin(19)
-I2C_ADDR = 0x27     # DEC 39, HEX 0x27
-NUM_ROWS = 4
-NUM_COLS = 20
+I2C_ADDR_2004 = 0x27
+NUM_ROWS_2004 = 4
+NUM_COLS_2004 = 20
 
-# Button matrix setup
-cols = [Pin(14, Pin.OUT), Pin(27, Pin.OUT)]
-rows = [Pin(26, Pin.IN, Pin.PULL_UP), Pin(25, Pin.IN, Pin.PULL_UP), Pin(33, Pin.IN, Pin.PULL_UP)]
+# 1602 display setup
+scl_1602 = Pin(25)
+sda_1602 = Pin(26)
+I2C_ADDR_1602 = 0x27
+NUM_ROWS_1602 = 2
+NUM_COLS_1602 = 16
 
-i2c = SoftI2C(scl=scl_2004, sda=sda_2004, freq=100000)  # Reduced frequency for reliability
-lcd = LCD(addr=I2C_ADDR, cols=NUM_COLS, rows=NUM_ROWS, i2c=i2c)
-lcd.begin()
-lcd.clear()
+# Button matrix pins
+cols = [Pin(14, Pin.OUT), Pin(15, Pin.OUT), Pin(33, Pin.OUT), Pin(32, Pin.OUT), Pin(0, Pin.OUT)]
+rows = [Pin(2, Pin.IN, Pin.PULL_UP), Pin(4, Pin.IN, Pin.PULL_UP),
+    Pin(5, Pin.IN, Pin.PULL_UP), Pin(12, Pin.IN, Pin.PULL_UP), Pin(13, Pin.IN, Pin.PULL_UP)]
+
+# 2004 init
+i2c_2004 = SoftI2C(scl=scl_2004, sda=sda_2004, freq=100000)  # Reduced frequency for reliability
+lcd_2004 = LCD(addr=I2C_ADDR_2004, cols=NUM_COLS_2004, rows=NUM_ROWS_2004, i2c=i2c_2004)
+lcd_2004.begin()
+lcd_2004.clear()
+
+# 1602 init
+i2c_1602 = SoftI2C(scl=scl_1602, sda=sda_1602, freq=100000)
+lcd_1602 = LCD(addr=I2C_ADDR_1602, cols=NUM_COLS_1602, rows=NUM_ROWS_1602, i2c=i2c_1602)
+lcd_1602.begin()
+lcd_1602.clear()
 
 reactor = ReactorCore()
 sys = ReactorSystems()
 
-time_now = 0
+# Init values
+time_now = 0.0
 reactor.time_step = 1.0
-reactor.initial_power = 10
-time_delay = 1.0
+reactor.initial_power = 10.0
 
-# Renamed to avoid conflict with function name
-button_states = []  
+# Main loop variables
+is_alarm = False
+is_scram = False
+is_autopilot_rods = False
+power_autopilot_rods = 500.0
+old_switch_states = [5 * [False] for i in range(5)]
+new_switch_states = [5 * [False] for i in range(5)]
+display_menu = 0  # 0 - display A, 1 - display B, 3 - display core, 4 - display reserve
+display_refresh_time = 1.0
+time_step_sim = 1.0
+last_refreshed = 0.0
 
-def handle_button_press(row_index: int, col_index: int):
+def print_1602(log_msg: str, autopilot_msg: str):
     """
-    Make changes according to buttons pressed
+    Quickly clear the 1602 display and print messages
     """
-    global time_delay  # Need to declare since we're modifying it
+
+    lcd_1602.set_cursor(0, 0)
+    lcd_1602.print(32 * ' ')
+    lcd_1602.set_cursor(0, 0)
+
+    lcd_1602.print(log_msg)
+
+    x = 16 - len(autopilot_msg)
+    if x < 0:
+        raise Exception("1602 display autopilot string too long")
+
+    lcd.set_cursor(x, 1)
+    lcd.print(autopilot_msg)
+
+# def handle_switch(row_index: int, col_index: int):
+#     """
+#     Make changes according to switches activated
+#     """
     
-    print(f"Button pressed - Row: {row_index}, Col: {col_index}")  # Debug output
+#     global display_menu
+#     global power_autopilot_rods
+#     global is_scram
+#     global is_alarm
+#     global time_step_sim
+#     global is_autopilot_rods
     
-    if col_index == 0:  # Changed to 0-based index
-        if row_index == 0:
-            reactor.rods_pos += 0.1  # Rods up
-            print("Rods up")
-        elif row_index == 1:
-            reactor.rods_pos -= 0.1  # Rods down
-            print("Rods down")
-        elif row_index == 2:
-            sys.vlvA_main = not sys.vlvA_main
-            print(f"vlvA_main toggled: {sys.vlvA_main}")
+#     print(f"Button pressed - Row: {row_index}, Col: {col_index}")  # Debug output
 
-    elif col_index == 1:  # Changed to 0-based index
-        if row_index == 0:
-            sys.pumpA = not sys.pumpA
-            print(f"pumpA toggled: {sys.pumpA}")
-        elif row_index == 1:
-            time_delay = 0.1 if time_delay == 1.0 else 1.0
-            print(f"Time delay changed to: {time_delay}")
-        elif row_index == 2:
-            reactor.is_scram = not reactor.is_scram
-            reactor.check_SCRAM(reactor.is_scram)
-            print(f"SCRAM toggled: {reactor.is_scram}")
-    
-    else:
-        return
+#     # _ = True
 
-def scan_buttons(cols: list, rows: list):
+#     # switch_vars = [
+#     #     [sys.vlvA_main, sys.pumpA, sys.vlvA_3, sys.powerA_3, sys.vlvA_relief],
+#     #     [sys.vlvB_main, sys.vlvB_2, sys.pumpB, sys.vlvB_relief, sys.vlvB_4],
+#     #     [sys.pumpB_4, _, _, _, _],
+#     #     [is_alarm, reactor.is_scram, _, sys.vlvA_4, sys.vlv_empty_relief]
+#     #     # Fifth column handled separately
+#     #     ]
+
+#     # # Handle boolean on/off switches
+#     # for i in range(4):
+#     #     for j in range(5):
+#     #         if col_index == i:
+#     #             if row_index == j:
+#     #                 switch_vars[i][j] = True
+#     #         else:
+#     #             switch_vars[i][j] = False
+
+#     if col_index == 0:
+#         if row_index == 1:
+#             sys.vlvA_main = True
+#         else:
+#             sys.vlvA_main = False
+
+#         if row_index == 1:
+#             sys.pumpA = True
+#         else:
+#             sys.pumpA = False
+
+#         if row_index == 2:
+#             sys.vlvA_3 = True
+#         else:
+#             sys.vlvA_3 = False
+
+#         if row_index == 3:
+#             sys.powerA_3 = True
+#         else:
+#             sys.powerA_3 = False
+
+#         if row_index == 4:
+#             sys.vlvA_relief = True
+#         else:
+#             sys.vlvA_main = False
+
+#     if col_index == 1:
+#         if row_index == 0:
+#             sys.vlvB_main = True
+#         else:
+#             sys.vlvB_main = False
+
+#         if row_index == 1:
+#             sys.vlvB_2 = True
+#         else:
+#             sys.vlvB_2 = False
+
+#         if row_index == 2:
+#             sys.pumpB = True
+#         else:
+#             sys.pumpB = False
+
+#         if row_index == 3:
+#             sys.vlvB_relief = True
+#         else:
+#             sys.vlvB_relief = False
+
+#         if row_index == 4:
+#             sys.vlvB_4 = True
+#         else:
+#             sys.vlvB_4 = False
+
+#     if col_index == 2:
+#         if row_index == 0:
+#             sys.pumpB_4 = True
+#         else:
+#             sys.pumpB_4 = False
+
+#         if row_index == 1:
+#             display_menu = 0  # display A
+
+#         if row_index == 2:
+#             display_menu = 1  # display B
+
+#         if row_index == 3:
+#             display_menu = 2  # display core
+
+#         if row_index == 4:
+#             display_menu = 3  # display reserve
+
+#     if col_index == 3:
+#         if row_index == 0:
+#             is_alarm = False
+#             if is_scram == True and round(reactor.rods_pos, 3) == 0:
+#                 is_scram = False  # Turn off SCRAM with alarm off
+
+#         if row_index == 1:
+#             is_scram = True
+
+#         if row_index == 2:
+#             time_step_sim = 10
+#         else:
+#             time_step_sim = 1
+
+#         if row_index == 3:
+#             sys.vlvA_4 = True
+#         else:
+#             sys.vlvA_4 = False
+
+#         if row_index == 4:
+#             sys.vlv_empty_relief = True
+#         else:
+#             sys.vlv_empty_relief = False
+
+#     if col_index == 4:
+#         if row_index == 0:
+#             is_autopilot_rods = True
+#         else:
+#             is_autopilot_rods = False
+
+#         if row_index == 1:
+#             power_autopilot_rods += 50
+
+#         if row_index == 2:
+#             power_autopilot_rods -= 50
+
+#         if not sys.MELTDOWN:
+#             if row_index == 3:
+#                 reactor.move_rods(1.0)
+
+#             if row_index == 4:
+#                 reactor.move_rods(0.0)
+
+def handle_switches(switch_states: list):  # Rename to update_switch
     """
-    Scan button matrix and detect presses
+    Make changes according to switches activated
+    switch_states[a][b] means switch in column a, row b
     """
+
+    global display_menu
+    global power_autopilot_rods
+    global is_scram
+    global is_alarm
+    global time_step_sim
+    global is_autopilot_rods
+
+    # Column 0/4
+    sys.vlvA_main = switch_states[0][0]
+    sys.pumpA = switch_states[0][1]
+    sys.vlvA_3 = switch_states[0][2]
+    sys.powerA_3 = switch_states[0][3]
+    sys.vlvA_relief = switch_states[0][4]
+
+    # Column 1/4
+    sys.vlvB_main = switch_states[1][0]
+    sys.vlvB_2 = switch_states[1][1]
+    sys.pumpB = switch_states[1][2]
+    sys.vlvB_relief = switch_states[1][3]
+    sys.vlvB_4 = switch_states[1][4]
+
+    # Column 2/4
+    sys.pumpB_4 = switch_states[2][0]
+    if switch_states[2][1]:
+        display_menu = 0  # Display A
+    elif switch_states[2][2]:
+        display_menu = 1  # Display B
+    elif switch_states[2][3]:
+        display_menu = 3  # Display core
+    elif switch_states[2][4]:
+        display_menu = 4  # Display reserve
+
+    # Column 3/4
+    if switch_states[3][0]:
+        is_alarm = False
+        if is_scram and round(reactor.rods_pos, 3) == 0:
+            is_scram = False
+    if switch_states[3][1]:
+        is_scram = True
+    if switch_states[3][2]:
+        if time_step_sim == 1:
+            time_step_sim = 10  # 10x speed up
+        else:
+            time_step_sim = 1
+    sys.vlvA_4 = switch_states[3][3]
+    sys.vlv_empty_relief = switch_states[3][4]
+
+    # Column 4/4
+    is_autopilot_rods = switch_states[4][0]
+    if switch_states[4][1]:
+        power_autopilot_rods += 50  # 50 kW step
+    elif switch_states[4][2]:
+        power_autopilot_rods -= 50
+    if switch_states[4][3]:
+        reactor.move_rods(1)  # Rods up
+    elif switch_states[4][4]:
+        reactor.move_rods(0)  # Rods down
+
+
+def scan_switches(cols: list, rows: list):
+    """
+    Scan switch matrix and detect presses
+    """
+    global new_switch_states
+
     for col_idx, col in enumerate(cols):
         col.value(0)  # Activate current column
         
         for row_idx, row in enumerate(rows):
-            if row.value() == 0:  # Button pressed (active low)
-                handle_button_press(row_idx, col_idx)
+            if row.value() == 0:
+                new_switch_states[col_idx][row_idx] = True  # Switch activated (active low)
+            else:
+                new_switch_states[col_idx][row_idx] = False  # Switch off
         
         col.value(1)  # Deactivate column
         sleep_ms(1)  # Small delay between columns
 
-# # Setup interrupts for all rows
-# for row in rows:
-#     row.irq(trigger=Pin.IRQ_RISING, handler=row_interrupt_handler)
-
 time_start = time()
-time_now = 0
-display_refresh_time = 1
-last_refreshed = 0
 
-# Main loop
 while True:
+
+#     while time() - time_now < time_step_sim:    # Handle time boost
+# 
+#         time_start = time()
+#         
+#         power = reactor.solve_power(time=time_now)
+#         sys.simulate_systems(power)
+# 
+#         time_elapsed = time() - time_start
+#         time_now += time_step_sim * time_elapsed
+#         last_refreshed += time_elapsed
     
     power = reactor.solve_power(time=time_now)
-    period = reactor.period()
     sys.simulate_systems(power)
-        
+
+    period = reactor.period()
+
+    reactor.check_SCRAM(is_scram)
+
     if reactor.is_scram:
-        reactor.move_rods(0.0)
-    
-    scan_buttons(cols, rows)  # Check for button presses
-    
+        is_alarm = True
+        if not sys.MELTDOWN:
+            reactor.move_rods(0.0)
+
+    # Handle switches
+    scan_switches(cols, rows)  # Handle switches
+    if True:
+        handle_switches(new_switch_states)
+        print("Switches handled")
+        old_switch_states = new_switch_states
+
+    # Render display menu
     if last_refreshed >= display_refresh_time:
-        vals = [
-            f"Pow:{format_float(power, 5)}",
-            f"Rods:{format_float(reactor.rods_pos, 5)}",
-            f"Per:{format_float(period, 5)}",
-            f"TA_1:{format_float(sys.tempA_1, 4)}",
-            f"PA_1:{format_float(sys.pressA_1, 5)}",
-            f"Pump:{sys.pumpA}",
-            f"Vlv:{sys.vlvA_main}",
-            f"SCRM:{reactor.is_scram}"
-        ]
+        if display_menu == 0:  # Display A, left part is 10 characters wide
+            menu = [
+                f"TA_1:{format_float(sys.tempA_1, 4)} ",
+                f"PA_1:{format_float(sys.pressA_1, 4)} ",
+                f"TA_2:{format_float(sys.tempA_2, 4)} ",
+                f"PA_2:{format_float(sys.pressA_2, 4)} ",
+                f"PA_3:{format_float(sys.pressA_3, 4)}",
+                f"F_A:{format_float(sys.flowA, 4)}",
+                f"VA_1:{format_float(sys.volA_1, 4)}",
+                f"VA_2:{format_float(sys.volA_2, 4)}"
+            ]
+        elif display_menu == 1:  # Display B, left part is 10 characters wide
+            menu = [
+                f"TB_1:{format_float(sys.tempB_1, 4)} ",
+                f"PB_1:{format_float(sys.pressB_1, 4)} ",
+                f"TB_2:{format_float(sys.tempB_2, 4)} ",
+                f"PB_2:{format_float(sys.pressB_2, 4)} ",
+                f"F_B:{format_float(sys.flowB, 4)}",
+                f"VB_1:{format_float(sys.volB_1, 4)}",
+                f"VB_2:{format_float(sys.volB_2, 4)}",
+                ""
+            ]
+        elif display_menu == 2:  # Display core
+            menu = [
+                f"P_core:{format_float(power, 5)}",
+                f"Rods:{format_float(reactor.rods_pos, 5)}",
+                f"T_core:{format_float(sys.temp_core, 4)}",
+                f"Period:{format_float(period, 5)}",
+                "",
+                "",
+                "",
+                ""
+            ]
+        elif display_menu == 3:
+            menu = [
+                f"VA_4:{format_float(sys.volA_4, 4)}",
+                f"FA_4:{format_float(sys.flow_from_A_4, 4)}",
+                f"V_rel:{format_float(sys.vol_relief, 4)}",
+                "",
+                "",
+                "",
+                "",
+                ""
+            ]
         
-        print_vals_2004(lcd, vals)
+        print_vals_2004(lcd_2004,menu)
         last_refreshed = 0
     
-        # Debug output to terminal
-        print(f"Time: {time_now}, Power: {power}, Rods: {reactor.rods_pos}")
-    
+    print("\n" + str(new_switch_states))
+    print(not new_switch_states == old_switch_states)
+
     time_elapsed = time() - time_start
-    time_now += time_elapsed
+    time_now += time_step_sim * time_elapsed  # Handle time boost
     last_refreshed += time_elapsed
     time_start = time()
-    
+
     sleep_ms(1)
+
