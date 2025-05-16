@@ -1,5 +1,5 @@
 from lcd_i2c import LCD
-from machine import SoftI2C, Pin
+from machine import SoftI2C, Pin, PWM
 from time import sleep, sleep_ms, sleep_us, time
 
 def mean(list):
@@ -245,7 +245,7 @@ class ReactorSystems:
         self.temp_core = self.temp_ambient  # Temperature of core, C
 
         # Pressuriser heater power, kW
-        self.powerA_3_nom = 50.0
+        self.powerA_3_nom = 75.0
         self.powerA_3 = False
 
         # Water flow, m^3/s:
@@ -256,16 +256,16 @@ class ReactorSystems:
 
         # Volume, m^3:
         # Coolant is approximated as steam only
-        self.volA_1_default = 40.0  # Default value used later to adjust pressure for volA_1
+        self.volA_1_default = 7.0  # Default value used later to adjust pressure for volA_1
         self.volA_1 = self.volA_1_default  # Volume of coolant at core part of first loop
-        self.volA_2_default = 40.0
+        self.volA_2_default = 7.0
         self.volA_2 = self.volA_2_default  # Volume of coolant in stean generator part of first loop
-        self.volA_4 = 200.0  # Volume of coolant in reserve tank (first loop)
-        self.volA_3_default = 50.0
+        self.volA_4 = 20.0  # Volume of coolant in reserve tank (first loop)
+        self.volA_3_default = 3.0
         self.volA_3 = self.volA_3_default  # Volume of coolant in pressuriser (first loop)
-        self.volB_1_default = 70.0
+        self.volB_1_default = 7.0
         self.volB_1 = self.volB_1_default  # Volume of coolant after pump and before vlvB_main (second loop)
-        self.volB_2_default = 100.0
+        self.volB_2_default = 10.0
         self.volB_2 = self.volB_2_default  # Volume of coolant after vlvB_main and before pump (second loop)
 
         self.vol_relief = 0.0  # Volume of coolant in relief tank
@@ -292,15 +292,15 @@ class ReactorSystems:
         self.pumpB_4_nom_speed = 5  # Nominal speed of pumpB_4, m^3/s
 
         # Volumes of tanks, m^3:
-        self.VOLUME_A_1 = 40.0  # Volume of first part of first loop
-        self.VOLUME_A_2 = 40.0 # Volume of second part of second loop
+        self.VOLUME_A_1 = 1.5 * self.volA_1  # Volume of first part of first loop
+        self.VOLUME_A_2 = 1.5 * self.volA_2 # Volume of second part of second loop
         self.VOLUME_A = self.VOLUME_A_1 + self.VOLUME_A_2  # Volume of first loop
-        self.VOLUME_A_3 = 30.0  # Volume of pressuriser
-        self.VOLUME_A_4 = 40.0 # Volume of reserve coolant tank
-        self.VOLUME_B_1 = 100.0  # Volume of first part of second loop
-        self.VOLUME_B_2 = 70.0  # Volume of second part of second loop
-        self.VOLUME_B = 170.0  # Volume of second loop
-        self.VOLUME_RELIEF = 200.0  # Volume of relief tank
+        self.VOLUME_A_3 = 5.0  # Volume of pressuriser
+        self.VOLUME_A_4 = 20.0 # Volume of reserve coolant tank
+        self.VOLUME_B_1 = 1.5 * self.volB_1  # Volume of first part of second loop
+        self.VOLUME_B_2 = 1.5 * self.volB_2  # Volume of second part of second loop
+        self.VOLUME_B = self.VOLUME_B_1 + self.VOLUME_B_2  # Volume of second loop
+        self.VOLUME_RELIEF = 12.0  # Volume of relief tank
 
         # Physical constants:
         self.WORKING_PRESSURE_A = 7600.0  # Typical for BWR normal operating pressure (first loop), kPa (75 atmospheres)
@@ -308,7 +308,7 @@ class ReactorSystems:
         self.WATER_DENSITY = 1000.0  # kg/m^3
         self.HEAT_CAPACITY_WATER = 4.184  # J/(kg*K)
         # self.HEAT_TRANSFER_COEFF = 5000  # W/(m²*K) - typical for water-cooled reactors
-        self.MASS_CORE = 100000  # kg
+        self.MASS_CORE = 7000  # kg
         self.HEAT_CAPACITY_CORE = 247  # J/(kg*K) - uranium dioxide specific heat
 
         # Flow constants, m^3/s:
@@ -777,7 +777,7 @@ class ReactorSystems:
 
                         # Should create gradual change in flow
                         self.flow_from_A_4 += self.pumpB_4_nom_speed / self.delay_pumpB_4
-                        if delay_count_pumpB_4 >= self.delay_pumpB_4:
+                        if self.delay_count_pumpB_4 >= self.delay_pumpB_4:
                             self.marker_pumpB_4 = True
 
                     elif self.pumpB_4 == False:
@@ -1026,10 +1026,14 @@ I2C_ADDR_1602 = 0x27
 NUM_ROWS_1602 = 2
 NUM_COLS_1602 = 16
 
+# Alarm buzzer
+buzzer_freq = 5000  # 5 kHz
+buzzer = PWM(Pin(27), buzzer_freq, duty=0)
+
 # Button matrix pins
-cols = [Pin(14, Pin.OUT), Pin(15, Pin.OUT), Pin(33, Pin.OUT), Pin(32, Pin.OUT), Pin(0, Pin.OUT)]
-rows = [Pin(2, Pin.IN, Pin.PULL_UP), Pin(4, Pin.IN, Pin.PULL_UP),
-    Pin(5, Pin.IN, Pin.PULL_UP), Pin(12, Pin.IN, Pin.PULL_UP), Pin(13, Pin.IN, Pin.PULL_UP)]
+cols = [Pin(14, Pin.OUT), Pin(15, Pin.OUT), Pin(33, Pin.OUT), Pin(32, Pin.OUT), Pin(21, Pin.OUT)]
+rows = [Pin(2, Pin.IN, Pin.PULL_DOWN), Pin(4, Pin.IN, Pin.PULL_DOWN),
+    Pin(5, Pin.IN, Pin.PULL_DOWN), Pin(12, Pin.IN, Pin.PULL_DOWN), Pin(13, Pin.IN, Pin.PULL_DOWN)]
 
 # 2004 init
 i2c_2004 = SoftI2C(scl=scl_2004, sda=sda_2004, freq=100000)  # Reduced frequency for reliability
@@ -1052,10 +1056,11 @@ reactor.time_step = 1.0
 reactor.initial_power = 10.0
 
 # Main loop variables
-is_alarm = False
-is_scram = False
+is_alarm_init = False
+is_alarm_off = False  # Used to handle alarm off button
 is_autopilot_rods = False
 power_autopilot_rods = 500.0
+log_msg = ""  # Message to display actions on 1602 display
 old_switch_states = [5 * [False] for i in range(5)]
 new_switch_states = [5 * [False] for i in range(5)]
 display_menu = 0  # 0 - display A, 1 - display B, 3 - display core, 4 - display reserve
@@ -1068,8 +1073,9 @@ def print_1602(log_msg: str, autopilot_msg: str):
     Quickly clear the 1602 display and print messages
     """
 
-    lcd_1602.set_cursor(0, 0)
-    lcd_1602.print(32 * ' ')
+#     lcd_1602.set_cursor(0, 0)
+#     lcd_1602.print(32 * ' ')
+    lcd_1602.clear()
     lcd_1602.set_cursor(0, 0)
 
     lcd_1602.print(log_msg)
@@ -1078,8 +1084,8 @@ def print_1602(log_msg: str, autopilot_msg: str):
     if x < 0:
         raise Exception("1602 display autopilot string too long")
 
-    lcd.set_cursor(x, 1)
-    lcd.print(autopilot_msg)
+    lcd_1602.set_cursor(x, 1)
+    lcd_1602.print(autopilot_msg)
 
 # def handle_switch(row_index: int, col_index: int):
 #     """
@@ -1186,7 +1192,7 @@ def print_1602(log_msg: str, autopilot_msg: str):
 
 #     if col_index == 3:
 #         if row_index == 0:
-#             is_alarm = False
+#             is_alarm_init = False
 #             if is_scram == True and round(reactor.rods_pos, 3) == 0:
 #                 is_scram = False  # Turn off SCRAM with alarm off
 
@@ -1235,10 +1241,12 @@ def handle_switches(switch_states: list):  # Rename to update_switch
 
     global display_menu
     global power_autopilot_rods
-    global is_scram
+    # global is_scram
     global is_alarm
     global time_step_sim
     global is_autopilot_rods
+    global log_msg
+    global is_alarm_off
 
     # Column 0/4
     sys.vlvA_main = switch_states[0][0]
@@ -1261,17 +1269,19 @@ def handle_switches(switch_states: list):  # Rename to update_switch
     elif switch_states[2][2]:
         display_menu = 1  # Display B
     elif switch_states[2][3]:
-        display_menu = 3  # Display core
+        display_menu = 2  # Display core
     elif switch_states[2][4]:
-        display_menu = 4  # Display reserve
+        display_menu = 3  # Display reserve
 
     # Column 3/4
     if switch_states[3][0]:
-        is_alarm = False
-        if is_scram and round(reactor.rods_pos, 3) == 0:
-            is_scram = False
+        is_alarm_off = True
+        if reactor.is_scram and round(reactor.rods_pos, 3) == 0:
+            reactor.is_scram = False
+    else:
+        is_alarm_off = False
     if switch_states[3][1]:
-        is_scram = True
+        reactor.is_scram = True
     if switch_states[3][2]:
         if time_step_sim == 1:
             time_step_sim = 10  # 10x speed up
@@ -1283,13 +1293,22 @@ def handle_switches(switch_states: list):  # Rename to update_switch
     # Column 4/4
     is_autopilot_rods = switch_states[4][0]
     if switch_states[4][1]:
-        power_autopilot_rods += 50  # 50 kW step
+        print("ap power up")
+        if power_autopilot_rods <= 950:
+            power_autopilot_rods += 50  # 50 kW step
+        else:
+            power_autopilot_rods = 1000
     elif switch_states[4][2]:
-        power_autopilot_rods -= 50
-    if switch_states[4][3]:
-        reactor.move_rods(1)  # Rods up
-    elif switch_states[4][4]:
-        reactor.move_rods(0)  # Rods down
+        print("ap power down")
+        if power_autopilot_rods >= 50:
+            power_autopilot_rods -= 50
+        else:
+            power_autopilot_rods = 0
+    if not sys.MELTDOWN:
+        if switch_states[4][3]:
+            reactor.move_rods(1)  # Rods up
+        elif switch_states[4][4]:
+            reactor.move_rods(0)  # Rods down
 
 
 def scan_switches(cols: list, rows: list):
@@ -1299,15 +1318,15 @@ def scan_switches(cols: list, rows: list):
     global new_switch_states
 
     for col_idx, col in enumerate(cols):
-        col.value(0)  # Activate current column
+        col.value(1)  # Activate current column
         
         for row_idx, row in enumerate(rows):
-            if row.value() == 0:
+            if row.value() == 1:
                 new_switch_states[col_idx][row_idx] = True  # Switch activated (active low)
             else:
                 new_switch_states[col_idx][row_idx] = False  # Switch off
         
-        col.value(1)  # Deactivate column
+        col.value(0)  # Deactivate column
         sleep_ms(1)  # Small delay between columns
 
 time_start = time()
@@ -1330,24 +1349,40 @@ while True:
 
     period = reactor.period()
 
-    reactor.check_SCRAM(is_scram)
+    # Handle switches
+    scan_switches(cols, rows)  # Handle switches
+    handle_switches(new_switch_states)
+    
+    reactor.check_SCRAM(reactor.is_scram)
 
     if reactor.is_scram:
-        is_alarm = True
+        if is_alarm_off:
+            is_alarm_init = False
+        else:
+            is_alarm_init = True
         if not sys.MELTDOWN:
             reactor.move_rods(0.0)
 
-    # Handle switches
-    scan_switches(cols, rows)  # Handle switches
-    if True:
-        handle_switches(new_switch_states)
-        print("Switches handled")
-        old_switch_states = new_switch_states
+    if is_alarm_off:
+        is_alarm_init = False
+
+    if is_alarm_init:
+        buzzer.duty(512)
+    else:
+        buzzer.duty(0)
+    
+    print(f"ALARM OFF: {is_alarm_off}")
+    print(f"ALARM: {is_alarm_init}")
+    
+    if is_autopilot_rods:
+        print("autopilot on")
+        reactor.autopilot(goal_pwr=power_autopilot_rods)
 
     # Render display menu
     if last_refreshed >= display_refresh_time:
+        
         if display_menu == 0:  # Display A, left part is 10 characters wide
-            menu = [
+            menu_2004 = [
                 f"TA_1:{format_float(sys.tempA_1, 4)} ",
                 f"PA_1:{format_float(sys.pressA_1, 4)} ",
                 f"TA_2:{format_float(sys.tempA_2, 4)} ",
@@ -1358,7 +1393,7 @@ while True:
                 f"VA_2:{format_float(sys.volA_2, 4)}"
             ]
         elif display_menu == 1:  # Display B, left part is 10 characters wide
-            menu = [
+            menu_2004 = [
                 f"TB_1:{format_float(sys.tempB_1, 4)} ",
                 f"PB_1:{format_float(sys.pressB_1, 4)} ",
                 f"TB_2:{format_float(sys.tempB_2, 4)} ",
@@ -1366,10 +1401,10 @@ while True:
                 f"F_B:{format_float(sys.flowB, 4)}",
                 f"VB_1:{format_float(sys.volB_1, 4)}",
                 f"VB_2:{format_float(sys.volB_2, 4)}",
-                ""
+                f"P_tb:{format_float(sys.turbine_power, 4)}"
             ]
         elif display_menu == 2:  # Display core
-            menu = [
+            menu_2004 = [
                 f"P_core:{format_float(power, 5)}",
                 f"Rods:{format_float(reactor.rods_pos, 5)}",
                 f"T_core:{format_float(sys.temp_core, 4)}",
@@ -1380,7 +1415,7 @@ while True:
                 ""
             ]
         elif display_menu == 3:
-            menu = [
+            menu_2004 = [
                 f"VA_4:{format_float(sys.volA_4, 4)}",
                 f"FA_4:{format_float(sys.flow_from_A_4, 4)}",
                 f"V_rel:{format_float(sys.vol_relief, 4)}",
@@ -1391,9 +1426,20 @@ while True:
                 ""
             ]
         
-        print_vals_2004(lcd_2004,menu)
+        # 1602 display
+        log_msg = "Test msg"
+        autopilot_msg = "A/P:" + str(round(power_autopilot_rods, 1))
+        
+        print_vals_2004(lcd_2004, menu_2004)
+        print_1602(log_msg=log_msg, autopilot_msg=autopilot_msg)
         last_refreshed = 0
     
+    print("\nNew:" + str(new_switch_states))
+    print("Old:" + str(old_switch_states))
+    if not new_switch_states == old_switch_states:
+        print("Buttons changed")
+        old_switch_states = new_switch_states
+
     print("\n" + str(new_switch_states))
     print(not new_switch_states == old_switch_states)
 
