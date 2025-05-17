@@ -1,6 +1,6 @@
 from lcd_i2c import LCD
 from machine import SoftI2C, Pin, PWM
-from time import sleep, sleep_ms, sleep_us, time
+import time
 
 def mean(list):
     """Computes mean of a list"""
@@ -1032,8 +1032,8 @@ buzzer = PWM(Pin(27), buzzer_freq, duty=0)
 
 # Button matrix pins
 cols = [Pin(14, Pin.OUT), Pin(15, Pin.OUT), Pin(33, Pin.OUT), Pin(32, Pin.OUT), Pin(21, Pin.OUT)]
-rows = [Pin(2, Pin.IN, Pin.PULL_DOWN), Pin(4, Pin.IN, Pin.PULL_DOWN),
-    Pin(5, Pin.IN, Pin.PULL_DOWN), Pin(12, Pin.IN, Pin.PULL_DOWN), Pin(13, Pin.IN, Pin.PULL_DOWN)]
+rows = [Pin(2, Pin.IN, Pin.PULL_UP), Pin(4, Pin.IN, Pin.PULL_UP),
+    Pin(5, Pin.IN, Pin.PULL_UP), Pin(12, Pin.IN, Pin.PULL_UP), Pin(13, Pin.IN, Pin.PULL_UP)]
 
 # 2004 init
 i2c_2004 = SoftI2C(scl=scl_2004, sda=sda_2004, freq=100000)  # Reduced frequency for reliability
@@ -1061,8 +1061,7 @@ is_alarm_off = False  # Used to handle alarm off button
 is_autopilot_rods = False
 power_autopilot_rods = 500.0
 log_msg = ""  # Message to display actions on 1602 display
-old_switch_states = [5 * [False] for i in range(5)]
-new_switch_states = [5 * [False] for i in range(5)]
+switch_states = [5 * [False] for i in range(5)]
 display_menu = 0  # 0 - display A, 1 - display B, 3 - display core, 4 - display reserve
 display_refresh_time = 1.0
 time_step_sim = 1.0
@@ -1315,21 +1314,21 @@ def scan_switches(cols: list, rows: list):
     """
     Scan switch matrix and detect presses
     """
-    global new_switch_states
+    global switch_states
 
     for col_idx, col in enumerate(cols):
-        col.value(1)  # Activate current column
+        col.value(0)  # Activate current column
         
         for row_idx, row in enumerate(rows):
-            if row.value() == 1:
-                new_switch_states[col_idx][row_idx] = True  # Switch activated (active low)
+            if row.value() == 0:
+                switch_states[col_idx][row_idx] = True  # Switch activated (active low)
             else:
-                new_switch_states[col_idx][row_idx] = False  # Switch off
+                switch_states[col_idx][row_idx] = False  # Switch off
         
-        col.value(0)  # Deactivate column
-        sleep_ms(1)  # Small delay between columns
+        col.value(1)  # Deactivate column
+        time.sleep_ms(1)  # Small delay between columns
 
-time_start = time()
+time_start = time.time()
 
 while True:
 
@@ -1351,7 +1350,7 @@ while True:
 
     # Handle switches
     scan_switches(cols, rows)  # Handle switches
-    handle_switches(new_switch_states)
+    handle_switches(switch_states)
     
     reactor.check_SCRAM(reactor.is_scram)
 
@@ -1370,9 +1369,6 @@ while True:
         buzzer.duty(512)
     else:
         buzzer.duty(0)
-    
-    print(f"ALARM OFF: {is_alarm_off}")
-    print(f"ALARM: {is_alarm_init}")
     
     if is_autopilot_rods:
         print("autopilot on")
@@ -1434,19 +1430,14 @@ while True:
         print_1602(log_msg=log_msg, autopilot_msg=autopilot_msg)
         last_refreshed = 0
     
-    print("\nNew:" + str(new_switch_states))
-    print("Old:" + str(old_switch_states))
-    if not new_switch_states == old_switch_states:
-        print("Buttons changed")
-        old_switch_states = new_switch_states
+    print(str(switch_states))
 
-    print("\n" + str(new_switch_states))
-    print(not new_switch_states == old_switch_states)
+    print("\n" + str(switch_states))
 
-    time_elapsed = time() - time_start
+    time_elapsed = time.time() - time_start
     time_now += time_step_sim * time_elapsed  # Handle time boost
     last_refreshed += time_elapsed
-    time_start = time()
+    time_start = time.time()
 
-    sleep_ms(1)
+    time.sleep_ms(1)
 
