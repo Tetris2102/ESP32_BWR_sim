@@ -645,17 +645,18 @@ class ReactorSystems:
 
         if self.vlvB_main:
             pressB_1 = self.pressure(self.tempB_1, self.volB_1, self.VOLUME_B)
+
         else:
             pressB_1 = self.pressure(self.tempB_1, self.volB_1, self.VOLUME_B_1)
-
-        if self.vlvB_2:
+        
+        if self.vlvB_2 and self.vlvB_main:
             pressB_2 = self.pressure(self.tempB_2, self.volB_2, self.VOLUME_B)
         else:
             pressB_2 = self.pressure(self.tempB_2, self.volB_2, self.VOLUME_B_2)
 
         # Calculate pressure in B_1 and B_2
-        self.pressB_1 = self.eq_k * (pressB_1 - self.pressB_1)
-        self.pressB_2 = self.eq_k * (pressB_2 - self.pressB_2)
+        self.pressB_1 += self.eq_k * (pressB_1 - self.pressB_1)
+        self.pressB_2 += self.eq_k * (pressB_2 - self.pressB_2)
 
         if self.vlvB_main and self.vlvB_2:
 
@@ -794,7 +795,7 @@ class ReactorSystems:
 
     def update_relief(self):
         """
-        Updates relief tanks for loops A and B
+        Updates relief tank (only one) for loops A and B
         """
 
         if self.vlvA_relief:
@@ -1027,7 +1028,7 @@ NUM_ROWS_1602 = 2
 NUM_COLS_1602 = 16
 
 # Alarm buzzer
-buzzer_freq = 5000  # 5 kHz
+buzzer_freq = 3000  # 3 kHz
 buzzer = PWM(Pin(27), buzzer_freq, duty=0)
 
 # Button matrix pins
@@ -1058,13 +1059,16 @@ reactor.initial_power = 10.0
 # Main loop variables
 is_alarm_init = False
 is_alarm_off = False  # Used to handle alarm off button
+last_alarm_toggle = 0
+is_alarm_sound = False  # Used to create alternating alarm sound
 is_autopilot_rods = False
 power_autopilot_rods = 500.0
 log_msg = ""  # Message to display actions on 1602 display
 switch_states = [5 * [False] for i in range(5)]
-display_menu = 0  # 0 - display A, 1 - display B, 3 - display core, 4 - display reserve
+display_menu = 1  # 0 - display A, 1 - display B, 3 - display core, 4 - display reserve
 display_refresh_time = 1.0
-time_step_sim = 1.0
+# time_step_sim = 1.0
+is_paused = False  # Use time boost button to pause/unpause instead of time boost
 last_refreshed = 0.0
 
 def print_1602(log_msg: str, autopilot_msg: str):
@@ -1072,8 +1076,6 @@ def print_1602(log_msg: str, autopilot_msg: str):
     Quickly clear the 1602 display and print messages
     """
 
-#     lcd_1602.set_cursor(0, 0)
-#     lcd_1602.print(32 * ' ')
     lcd_1602.clear()
     lcd_1602.set_cursor(0, 0)
 
@@ -1085,152 +1087,6 @@ def print_1602(log_msg: str, autopilot_msg: str):
 
     lcd_1602.set_cursor(x, 1)
     lcd_1602.print(autopilot_msg)
-
-# def handle_switch(row_index: int, col_index: int):
-#     """
-#     Make changes according to switches activated
-#     """
-    
-#     global display_menu
-#     global power_autopilot_rods
-#     global is_scram
-#     global is_alarm
-#     global time_step_sim
-#     global is_autopilot_rods
-    
-#     print(f"Button pressed - Row: {row_index}, Col: {col_index}")  # Debug output
-
-#     # _ = True
-
-#     # switch_vars = [
-#     #     [sys.vlvA_main, sys.pumpA, sys.vlvA_3, sys.powerA_3, sys.vlvA_relief],
-#     #     [sys.vlvB_main, sys.vlvB_2, sys.pumpB, sys.vlvB_relief, sys.vlvB_4],
-#     #     [sys.pumpB_4, _, _, _, _],
-#     #     [is_alarm, reactor.is_scram, _, sys.vlvA_4, sys.vlv_empty_relief]
-#     #     # Fifth column handled separately
-#     #     ]
-
-#     # # Handle boolean on/off switches
-#     # for i in range(4):
-#     #     for j in range(5):
-#     #         if col_index == i:
-#     #             if row_index == j:
-#     #                 switch_vars[i][j] = True
-#     #         else:
-#     #             switch_vars[i][j] = False
-
-#     if col_index == 0:
-#         if row_index == 1:
-#             sys.vlvA_main = True
-#         else:
-#             sys.vlvA_main = False
-
-#         if row_index == 1:
-#             sys.pumpA = True
-#         else:
-#             sys.pumpA = False
-
-#         if row_index == 2:
-#             sys.vlvA_3 = True
-#         else:
-#             sys.vlvA_3 = False
-
-#         if row_index == 3:
-#             sys.powerA_3 = True
-#         else:
-#             sys.powerA_3 = False
-
-#         if row_index == 4:
-#             sys.vlvA_relief = True
-#         else:
-#             sys.vlvA_main = False
-
-#     if col_index == 1:
-#         if row_index == 0:
-#             sys.vlvB_main = True
-#         else:
-#             sys.vlvB_main = False
-
-#         if row_index == 1:
-#             sys.vlvB_2 = True
-#         else:
-#             sys.vlvB_2 = False
-
-#         if row_index == 2:
-#             sys.pumpB = True
-#         else:
-#             sys.pumpB = False
-
-#         if row_index == 3:
-#             sys.vlvB_relief = True
-#         else:
-#             sys.vlvB_relief = False
-
-#         if row_index == 4:
-#             sys.vlvB_4 = True
-#         else:
-#             sys.vlvB_4 = False
-
-#     if col_index == 2:
-#         if row_index == 0:
-#             sys.pumpB_4 = True
-#         else:
-#             sys.pumpB_4 = False
-
-#         if row_index == 1:
-#             display_menu = 0  # display A
-
-#         if row_index == 2:
-#             display_menu = 1  # display B
-
-#         if row_index == 3:
-#             display_menu = 2  # display core
-
-#         if row_index == 4:
-#             display_menu = 3  # display reserve
-
-#     if col_index == 3:
-#         if row_index == 0:
-#             is_alarm_init = False
-#             if is_scram == True and round(reactor.rods_pos, 3) == 0:
-#                 is_scram = False  # Turn off SCRAM with alarm off
-
-#         if row_index == 1:
-#             is_scram = True
-
-#         if row_index == 2:
-#             time_step_sim = 10
-#         else:
-#             time_step_sim = 1
-
-#         if row_index == 3:
-#             sys.vlvA_4 = True
-#         else:
-#             sys.vlvA_4 = False
-
-#         if row_index == 4:
-#             sys.vlv_empty_relief = True
-#         else:
-#             sys.vlv_empty_relief = False
-
-#     if col_index == 4:
-#         if row_index == 0:
-#             is_autopilot_rods = True
-#         else:
-#             is_autopilot_rods = False
-
-#         if row_index == 1:
-#             power_autopilot_rods += 50
-
-#         if row_index == 2:
-#             power_autopilot_rods -= 50
-
-#         if not sys.MELTDOWN:
-#             if row_index == 3:
-#                 reactor.move_rods(1.0)
-
-#             if row_index == 4:
-#                 reactor.move_rods(0.0)
 
 def handle_switches(switch_states: list):  # Rename to update_switch
     """
@@ -1246,6 +1102,7 @@ def handle_switches(switch_states: list):  # Rename to update_switch
     global is_autopilot_rods
     global log_msg
     global is_alarm_off
+    global is_paused
 
     # Column 0/4
     sys.vlvA_main = switch_states[0][0]
@@ -1282,10 +1139,7 @@ def handle_switches(switch_states: list):  # Rename to update_switch
     if switch_states[3][1]:
         reactor.is_scram = True
     if switch_states[3][2]:
-        if time_step_sim == 1:
-            time_step_sim = 10  # 10x speed up
-        else:
-            time_step_sim = 1
+        is_paused = True  # Only toggle on pause to avoid accidental unpausing
     sys.vlvA_4 = switch_states[3][3]
     sys.vlv_empty_relief = switch_states[3][4]
 
@@ -1330,18 +1184,27 @@ def scan_switches(cols: list, rows: list):
 
 time_start = time.time()
 
+# Startup message
+# Message needs to be backwards to be printed correctly
+startup_msg = 20 * ' ' + "     by Taras O.    " + "    BWR Sim v0.1    " + 20 * ' '
+lcd_2004.clear()
+lcd_2004.print(startup_msg)
+
+# Startup sound
+buzzer.duty(512)
+time.sleep_ms(200)
+buzzer.duty(0)
+
 while True:
 
-#     while time() - time_now < time_step_sim:    # Handle time boost
-# 
-#         time_start = time()
-#         
-#         power = reactor.solve_power(time=time_now)
-#         sys.simulate_systems(power)
-# 
-#         time_elapsed = time() - time_start
-#         time_now += time_step_sim * time_elapsed
-#         last_refreshed += time_elapsed
+    while is_paused:
+        # REPLACE "TIME BOOST" BUTTON WITH "PAUSE" SWITCH TO AVOID COMPLICATED AND UNRELIABLE LOGIC HERE
+        scan_switches(cols, rows)
+        handle_switches(switch_states)
+        time.sleep_ms(100)
+        if switch_states[3][2]:
+            is_paused = False
+            time.sleep_ms(200)
     
     power = reactor.solve_power(time=time_now)
     sys.simulate_systems(power)
@@ -1366,9 +1229,16 @@ while True:
         is_alarm_init = False
 
     if is_alarm_init:
-        buzzer.duty(512)
+        current_time = time.ticks_ms()
+
+        # Make alarm sound every 1000 ms
+        if time.ticks_diff(current_time, last_alarm_toggle) > 300:
+            is_alarm_sound = not is_alarm_sound
+            buzzer.duty(512 if is_alarm_sound else 0)
+            last_alarm_toggle = current_time
     else:
         buzzer.duty(0)
+        is_alarm_sound = False
     
     if is_autopilot_rods:
         print("autopilot on")
@@ -1402,7 +1272,7 @@ while True:
         elif display_menu == 2:  # Display core
             menu_2004 = [
                 f"P_core:{format_float(power, 5)}",
-                f"Rods:{format_float(reactor.rods_pos, 5)}",
+                f"Rods:{format_float(reactor.rods_pos * 10**5, 4)}%",
                 f"T_core:{format_float(sys.temp_core, 4)}",
                 f"Period:{format_float(period, 5)}",
                 "",
@@ -1435,7 +1305,7 @@ while True:
     print("\n" + str(switch_states))
 
     time_elapsed = time.time() - time_start
-    time_now += time_step_sim * time_elapsed  # Handle time boost
+    time_now += time_elapsed
     last_refreshed += time_elapsed
     time_start = time.time()
 
