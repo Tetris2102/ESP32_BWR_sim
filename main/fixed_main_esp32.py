@@ -286,21 +286,21 @@ class ReactorSystems:
 
         # Pumps:
         self.pumpA = False
-        self.pumpA_nom_speed = 12  # Nominal speed of pumpA, m^3/s
+        self.pumpA_nom_flow = 12  # Nominal speed of pumpA, m^3/s
         self.pumpB = False
-        self.pumpB_nom_speed = 15  # Nominal speed of pumpB, m^3/s
+        self.pumpB_nom_flow = 15  # Nominal speed of pumpB, m^3/s
         self.pumpB_4 = False  # Pump to fill reserve water tank
-        self.pumpB_4_nom_speed = 5  # Nominal speed of pumpB_4, m^3/s
+        self.pumpB_4_nom_flow = 5  # Nominal speed of pumpB_4, m^3/s
 
         # Volumes of tanks, m^3:
         self.VOLUME_A_1 = 1.5 * self.volA_1  # Volume of first part of first loop
         self.VOLUME_A_2 = 1.5 * self.volA_2 # Volume of second part of second loop
-        self.VOLUME_A = self.VOLUME_A_1 + self.VOLUME_A_2  # Volume of first loop
+        # self.VOLUME_A = self.VOLUME_A_1 + self.VOLUME_A_2  # Volume of first loop
         self.VOLUME_A_3 = 5.0  # Volume of pressuriser
         self.VOLUME_A_4 = 20.0 # Volume of reserve coolant tank
         self.VOLUME_B_1 = 1.5 * self.volB_1  # Volume of first part of second loop
         self.VOLUME_B_2 = 1.5 * self.volB_2  # Volume of second part of second loop
-        self.VOLUME_B = self.VOLUME_B_1 + self.VOLUME_B_2  # Volume of second loop
+        # self.VOLUME_B = self.VOLUME_B_1 + self.VOLUME_B_2  # Volume of second loop
         self.VOLUME_RELIEF = 12.0  # Volume of relief tank
 
         # Physical constants:
@@ -321,7 +321,8 @@ class ReactorSystems:
 
         self.MAX_PRESSURE = 10000.0  # Max pressure for both loops, kPa
         self.TURBINE_EFFICIENCY = 0.85  # Efficiency of water turbine times efficiency of electric generator
-        self.launch_speed_turbine = 50.0 / self.time_step  # One second to increase turbine power by 50 kW
+        self.launch_speed_turbine = 50.0 * self.time_step  # One second to increase turbine power by 50 kW
+        self.normal_press_drop_turbine = 2000.0  # Working pressure drop between B_1 and B_2 for turbine to work, kPa
         # self.SURFACE_AREA_CORE = 200  # m^2 - approximate heat transfer surface area
         # self.SURFACE_AREA_A = 200   # m^2 - used for calculating heat loss
         # self.PUMP_MAX_FLOW = 12         # Flow created by pumps at maximum power, m^3/s
@@ -527,14 +528,14 @@ class ReactorSystems:
                 if self.pumpA:
 
                     self.delay_count_pumpA += 1
-                    self.flowA += self.pumpA_nom_speed / self.delay_pumpA
+                    self.flowA += self.pumpA_nom_flow / self.delay_pumpA
                     if self.delay_count_pumpA >= self.delay_pumpA:
                         self.marker_pumpA = True
 
                 elif self.pumpA == False:
 
                     self.delay_count_pumpA -= 1
-                    self.flowA -= self.pumpA_nom_speed / self.delay_pumpA
+                    self.flowA -= self.pumpA_nom_flow / self.delay_pumpA
                     if self.delay_count_pumpA <= 0:
                         self.marker_pumpA = False
 
@@ -595,7 +596,7 @@ class ReactorSystems:
                 P_max_transfer = P_generated * normalized_diff
                 
                 # Actual heat transfer limited by flow capacity
-                P_flow_limit = self.flowA / self.pumpA_nom_speed * P_generated * normalized_diff
+                P_flow_limit = self.flowA / self.pumpA_nom_flow * P_generated * normalized_diff
                 
                 # Use the smaller of the two limits
                 P_removed = min(P_max_transfer, P_flow_limit)
@@ -676,7 +677,20 @@ class ReactorSystems:
 
         if self.vlvB_main and (self.vlvB_2 or self.pressB_1 > 1000):
 
-            # No need to equalise pressure and temperature since turbine function handles pressure and temperature drop
+            # Equalise pressures between A_1 and A_2
+            if not self.pressB_1 == self.pressB_2:
+                press1 = self.compute_equalised_press(self.pressB_1, self.VOLUME_B_1, self.pressB_2, self.VOLUME_B_2)
+                # This should be smooth, eq_k is a guess, ADJUST
+                self.pressB_1 += self.eq_k * (press1 - self.pressB_1)
+                self.pressB_2 += self.eq_k * (press1 - self.pressB_2)
+
+            # Equalise temperatures
+            w1 = self.volB_1 / (self.volB_1 + self.volB_2)
+            w2 = self.volB_2 / (self.volB_1 + self.volB_2)
+            temp1 = (w1 * self.tempB_1 + w2 * self.tempB_2)
+            # This should be smooth, eq_k is a guess, ADJUST
+            self.tempB_1 += self.eq_k * (temp1 - self.tempB_1)
+            self.tempB_2 += self.eq_k * (temp1 - self.tempB_2)
 
             # Equalise volume of coolant
             if not (self.volB_1 == self.volB_1_default or self.volB_2 == self.volB_2_default):
@@ -685,28 +699,29 @@ class ReactorSystems:
                 if self.vlvB_2:
                     # Coolant flows through vlvB_2
                     # This should be smooth, eq_k is a guess, ADJUST
-                    self.volB_1 += self.eq_k * (v1 - self.volB_1)
+                    self.volB_1 -= self.eq_k * (v1 - self.volB_1)
                     self.volB_2 += self.eq_k * (v1 - self.volB_2)
                 else:
                     # Coolant flows through turbine
                     # This should be smooth, eq_k is a guess, ADJUST
-                    press_k = self.pressB_1 * self.WORKING_PRESSURE_B
-                    self.volB_1 += press_k * self.eq_k * (v1 - self.volB_1)
+                    press_k = self.pressB_1 / self.WORKING_PRESSURE_B
+                    self.volB_1 -= press_k * self.eq_k * (v1 - self.volB_1)
                     self.volB_2 += press_k * self.eq_k * (v1 - self.volB_2)
 
+            # Launch or stop pumpB
             if not self.marker_pumpB == self.pumpB:
 
-                if self.pumpB and self.vlvB_main and self.vlvB_2:
+                if self.pumpB:
 
                     self.delay_count_pumpB += 1
-                    self.flowB += self.pumpB_nom_speed / self.delay_pumpB  # pumpB gives 15 m^3/s at max power
+                    self.flowB += self.pumpB_nom_flow / self.delay_pumpB  # pumpB gives 15 m^3/s at max power
                     if self.delay_count_pumpB >= self.delay_pumpB:
                         self.marker_pumpB = True
 
                 elif self.pumpB == False:
 
                     self.delay_count_pumpB -= 1
-                    self.flowB -= self.pumpB_nom_speed / self.delay_pumpB
+                    self.flowB -= self.pumpB_nom_flow / self.delay_pumpB
                     if self.delay_count_pumpB <= 0:
                         self.marker_pumpB = False
 
@@ -714,21 +729,25 @@ class ReactorSystems:
 
             self.flowB = 0
 
-            # Pump launched, but vlvA_main is closed or meltdown occured
+            # Pump launched, but vlvB_main closed, vlvB_2 is closed or insufficient pressure for turbine launch
             if not self.marker_pumpB == self.pumpB:
 
                 if self.pumpB:
                     self.delay_count_pumpB += 1
-                    self.pressB_1 += 50  # Small pressure change
-                    self.pressB_2 -= 50
+                    self.pressB_1 += 20  # Small pressure change
+                    self.pressB_2 -= 20
                     if self.delay_count_pumpB >= self.delay_pumpB:  # Use >= to be safe
                         self.marker_pumpB = True
                 else:
                     self.delay_count_pumpB -= 1
-                    self.pressB_1 -= 10
-                    self.pressB_2 += 10
+                    self.pressB_1 -= 20
+                    self.pressB_2 += 20
                     if self.delay_count_pumpB <= 0:  # Use <= to be safe
                         self.marker_pumpB = False
+
+        # Handle negative flow
+        if self.flowB < 0:
+            self.flowB = 0
 
         # Check if there is enough coolant to allow flow
         if self.flowB > 0:
@@ -745,7 +764,7 @@ class ReactorSystems:
             if self.pressB_1 > 1000 and self.vlvB_main:
 
                 press_drop = 0.8 * (self.pressB_1 - self.pressB_2)
-                new_turbine_power = press_drop * self.flowB
+                new_turbine_power = press_drop / self.normal_press_drop_turbine
                 dP = self.turbine_power - new_turbine_power
 
                 # Using steps of self.launch_speed_turbine or less for smooth launch
@@ -804,14 +823,14 @@ class ReactorSystems:
                         self.delay_count_pumpB_4 += 1
 
                         # Should create gradual change in flow
-                        self.flow_from_A_4 += self.pumpB_4_nom_speed / self.delay_pumpB_4
+                        self.flow_from_A_4 += self.pumpB_4_nom_flow / self.delay_pumpB_4
                         if self.delay_count_pumpB_4 >= self.delay_pumpB_4:
                             self.marker_pumpB_4 = True
 
                     elif self.pumpB_4 == False:
 
                         delay_count_pumpB_4 -= 1
-                        self.flowA -= self.pumpB_4_nom_speed / self.delay_pumpB_4
+                        self.flowA -= self.pumpB_4_nom_flow / self.delay_pumpB_4
                         if self.delay_count_pumpA <= 0:
                             self.marker_pumpA = False
 
