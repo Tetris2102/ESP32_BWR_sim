@@ -37,13 +37,16 @@ class ReactorCore:
         self.power = self.initial_power
         self.power_history = [self.initial_power] * 4  # Added this line
 
-        self.rho_min = -0.003
-        self.rho_max = 0.007
+        self.rho_min = -0.15  # Was -0.005
+        self.rho_max = 0.04  # Was 0.007
 
         # rods_speed must be a multiple of rods_step
         self.rods_step = 0.001  # Minimum rod step
         self.rods_speed = 50 * self.rods_step  # Fraction of 1 per second
         self.rods_update_count = 0
+        
+        self.period = 1000
+        self.period_threshold = 7  # Period needed to initiste shutdown
 
         self.autopilot_power = 500.0  # kW
 
@@ -56,7 +59,7 @@ class ReactorCore:
             rods_pos = self.rods_pos
         return (self.rho_max - self.rho_min) * rods_pos + self.rho_min
 
-    def period(self):
+    def solve_period(self):
         if len(self.power_history) > 3:
             dp_dt = (self.power_history[3] - self.power_history[2]) / self.time_step
         else:
@@ -64,9 +67,9 @@ class ReactorCore:
 
         if self.power > 0.0 and dp_dt > 1e-4:
             e = 2.7183
-            period = e * self.power / dp_dt
-            if period < 2000:
-                return period
+            self.period = e * self.power / dp_dt
+            if self.period < 2000:
+                return self.period
 
         return ">2000"
 
@@ -179,7 +182,7 @@ class ReactorCore:
             if goal_pwr == None:
                 goal_pwr = self.autopilot_power
 
-            autopilot_window = 0.005 * goal_pwr  # 0.5% tolerance window (tighter control)
+            autopilot_window = 0.01 * goal_pwr  # 1% tolerance window
             real_pwr = mean(self.power_history)
 
             # If within tolerance, don't adjust
@@ -196,14 +199,15 @@ class ReactorCore:
             step = round(step, 4)
 
             # Adjust rods (direction corrected)
-            if real_pwr > goal_pwr:
-                # Power too high → insert rods (INCREASE rods_pos)
-                new_pos = min(1.0, self.rods_pos - step)
-                self.move_rods(new_pos)
-            else:
-                # Power too low → withdraw rods (DECREASE rods_pos)
-                new_pos = max(0.0, self.rods_pos + step)
-                self.move_rods(new_pos)
+            if self.period > 1000:
+                if real_pwr > goal_pwr:
+                    # Power too high → insert rods (INCREASE rods_pos)
+                    new_pos = min(1.0, self.period/2000 * (self.rods_pos - step))
+                    self.move_rods(new_pos)
+                else:
+                    # Power too low → withdraw rods (DECREASE rods_pos)
+                    new_pos = max(0.0, self.rods_pos + step)
+                    self.move_rods(new_pos)
 
     def check_SCRAM(self, cond_on, cond_off=False):
         """
@@ -295,12 +299,12 @@ class ReactorSystems:
         # Volumes of tanks, m^3:
         self.VOLUME_A_1 = 1.5 * self.volA_1  # Volume of first part of first loop
         self.VOLUME_A_2 = 1.5 * self.volA_2 # Volume of second part of second loop
-        # self.VOLUME_A = self.VOLUME_A_1 + self.VOLUME_A_2  # Volume of first loop
+        self.VOLUME_A = self.VOLUME_A_1 + self.VOLUME_A_2  # Volume of first loop
         self.VOLUME_A_3 = 5.0  # Volume of pressuriser
         self.VOLUME_A_4 = 20.0 # Volume of reserve coolant tank
         self.VOLUME_B_1 = 1.5 * self.volB_1  # Volume of first part of second loop
         self.VOLUME_B_2 = 1.5 * self.volB_2  # Volume of second part of second loop
-        # self.VOLUME_B = self.VOLUME_B_1 + self.VOLUME_B_2  # Volume of second loop
+        self.VOLUME_B = self.VOLUME_B_1 + self.VOLUME_B_2  # Volume of second loop
         self.VOLUME_RELIEF = 12.0  # Volume of relief tank
 
         # Physical constants:
@@ -353,7 +357,7 @@ class ReactorSystems:
         self.B_OP = False  # Second loop overpressure, pressure loss
 
         # Other:
-        self.turbine_power = 0  # Turbine generator output power, kW
+        self.power_turbine = 0  # Turbine generator output power, kW
         self.catastrophe = False  # Is used to raise catastrophe situation
         self.catastrophe_log = ""  # Is used to give catastrophe information
 
@@ -484,7 +488,10 @@ class ReactorSystems:
         if self.pressA_3 > 8000:
             self.volA_3 -= 0.5 * self.volA_3  # Automatic pressuriser relief valve
         
-        self.tempA_3 -= 0.1 * sqrt(self.tempA_3)
+        if self.tempA_3 > 20:
+            self.tempA_3 -= 0.1 * sqrt(self.tempA_3)
+        else:
+            self.tempA_3 = 20
 
         # Equalise pressures between A_3 and A_1
         if self.vlvA_3:
@@ -704,9 +711,10 @@ class ReactorSystems:
                 else:
                     # Coolant flows through turbine
                     # This should be smooth, eq_k is a guess, ADJUST
-                    press_k = self.pressB_1 / self.WORKING_PRESSURE_B
-                    self.volB_1 -= press_k * self.eq_k * (v1 - self.volB_1)
-                    self.volB_2 += press_k * self.eq_k * (v1 - self.volB_2)
+                    if self.pressB_1 > 1000:
+                        press_k = self.pressB_1 / self.WORKING_PRESSURE_B
+                        self.volB_1 -= press_k * self.eq_k * (v1 - self.volB_1)
+                        self.volB_2 += press_k * self.eq_k * (v1 - self.volB_2)
 
             # Launch or stop pumpB
             if not self.marker_pumpB == self.pumpB:
@@ -764,8 +772,8 @@ class ReactorSystems:
             if self.pressB_1 > 1000 and self.vlvB_main:
 
                 press_drop = 0.8 * (self.pressB_1 - self.pressB_2)
-                new_turbine_power = press_drop / self.normal_press_drop_turbine
-                dP = self.turbine_power - new_turbine_power
+                new_power_turbine = press_drop / self.normal_press_drop_turbine
+                dP = self.power_turbine - new_power_turbine
 
                 # Using steps of self.launch_speed_turbine or less for smooth launch
                 if dP >= 0:
@@ -779,7 +787,7 @@ class ReactorSystems:
                     else:
                         increment = -self.launch_speed_turbine
 
-                self.turbine_power += increment
+                self.power_turbine += increment
 
                 self.tempB_2 = self.eq_k * (self.tempB_1 - self.tempB_2)
                 self.pressB_2 = self.eq_k * (self.pressB_1 - self.pressB_2) * (self.VOLUME_B_2 / self.VOLUME_B)
@@ -1110,6 +1118,9 @@ reactor.initial_power = 10.0
 is_alarm_init = False
 is_alarm_off = False  # Used to handle alarm off button
 last_alarm_toggle = 0
+period_scram_warning = False  # Used to trigger SCRAM after period is < reactor.period_threshold for 2 cycles
+# scram_cond used to trigger shutdown and prevent rod movement during it
+scram_cond = (period_scram_warning and reactor.period < reactor.period_threshold) or sys.temp_core > 600 or reactor.is_scram
 is_alarm_sound = False  # Used to create alternating alarm sound
 is_autopilot_rods = False
 power_autopilot_rods = 500.0
@@ -1184,8 +1195,7 @@ def handle_switches(switch_states: list):  # Rename to update_switch
         is_alarm_off = True
         if reactor.is_scram and round(reactor.rods_pos, 3) == 0:
             reactor.is_scram = False
-    else:
-        is_alarm_off = False
+#             is_alarm_off = False  # Make False to allow the next alarm to begin
     if switch_states[3][1]:
         reactor.is_scram = True
     is_paused = switch_states[3][2]
@@ -1255,30 +1265,41 @@ while True:
     power = reactor.solve_power(time=time_now)
     sys.simulate_systems(power)
 
-    period = reactor.period()
+    period = reactor.solve_period()
 
     # Handle switches
     scan_switches(cols, rows)  # Handle switches
     handle_switches(switch_states)
     
+    if period_scram_warning and reactor.period < reactor.period_threshold:
+        reactor.is_scram = True
+    else:
+        period_scram_warning = False
+    
+    if reactor.period < reactor.period_threshold:
+        period_scram_warning = True
+    else:
+        period_scram_warning = False
+    
     reactor.check_SCRAM(reactor.is_scram)
 
-    if reactor.is_scram:
-        if is_alarm_off:
-            is_alarm_init = False
-        else:
-            is_alarm_init = True
+    scram_cond = power > 1070 or sys.temp_core > 600 or reactor.is_scram
+    
+    if not scram_cond:
+        is_alarm_init = False
+        is_alarm_off = False
+
+    if scram_cond:
+        is_alarm_init = True
         if not sys.MELTDOWN:
             reactor.move_rods(0.0)
 
-    if is_alarm_off:
-        is_alarm_init = False
-
-    if is_alarm_init:
+    if is_alarm_init and not is_alarm_off:
         current_time = time.ticks_ms()
 
-        # Make alarm sound every 1000 ms
-        if time.ticks_diff(current_time, last_alarm_toggle) > 300:
+        # Make alarm sound every 1000 ms (cannot be much less because one
+        # main loop cycle takes about 1000 ms)
+        if time.ticks_diff(current_time, last_alarm_toggle) > 300 and not is_paused:
             is_alarm_sound = not is_alarm_sound
             buzzer.duty(512 if is_alarm_sound else 0)
             last_alarm_toggle = current_time
@@ -1286,7 +1307,7 @@ while True:
         buzzer.duty(0)
         is_alarm_sound = False
     
-    if is_autopilot_rods:
+    if is_autopilot_rods and not scram_cond:
 #         print("autopilot on")  # For debugging
         reactor.autopilot(goal_pwr=power_autopilot_rods)
 
@@ -1313,7 +1334,7 @@ while True:
                 f"F_B:{format_float(sys.flowB, 4)}",
                 f"VB_1:{format_float(sys.volB_1, 4)}",
                 f"VB_2:{format_float(sys.volB_2, 4)}",
-                f"P_tb:{format_float(sys.turbine_power, 4)}"
+                f"P_tb:{format_float(sys.power_turbine, 4)}"
             ]
         elif display_menu == 2:  # Display core
             menu_2004 = [
@@ -1326,7 +1347,7 @@ while True:
                 "",
                 ""
             ]
-        elif display_menu == 3:
+        elif display_menu == 3:  # Display reserve
             menu_2004 = [
                 f"VA_4:{format_float(sys.volA_4, 4)}",
                 f"FA_4:{format_float(sys.flow_from_A_4, 4)}",
@@ -1353,13 +1374,12 @@ while True:
         
         if sys.catastrophe_log == "":
             log_msg_1602 = "No faults"
-        else:
+        elif not is_alarm_off:
             log_msg_1602 = sys.catastrophe_log
-
-            if is_alarm_off:
-                is_alarm_init = False
-            else:
-                is_alarm_init = True
+            is_alarm_init = True
+        else:
+            sys.catastrophe_log = ""
+            log_msg_1602 = "No faults"
 
         autopilot_msg = f"A/P:{power_autopilot_rods:.1f}"
         
@@ -1375,8 +1395,8 @@ while True:
     time_now += time_elapsed
     last_refreshed += time_elapsed
     time_start = time.time()
-    
-    print(sys.tempA_3)
 
     time.sleep_ms(1)
+    
+    print(is_alarm_init)
 
