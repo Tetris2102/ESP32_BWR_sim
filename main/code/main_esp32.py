@@ -37,16 +37,16 @@ class ReactorCore:
         self.power = self.initial_power
         self.power_history = [self.initial_power] * 4  # Added this line
 
-        self.rho_min = -0.15  # Was -0.005
-        self.rho_max = 0.04  # Was 0.007
+        self.rho_min = -0.05  # Was -0.005
+        self.rho_max = 0.009  # Was 0.007
 
         # rods_speed must be a multiple of rods_step
         self.rods_step = 0.001  # Minimum rod step
         self.rods_speed = 50 * self.rods_step  # Fraction of 1 per second
         self.rods_update_count = 0
         
-        self.period = 1000
-        self.period_threshold = 7  # Period needed to initiste shutdown
+        self.period = 2000
+        # self.period_threshold = 7  # Period needed to initiste shutdown
 
         self.autopilot_power = 500.0  # kW
 
@@ -199,15 +199,14 @@ class ReactorCore:
             step = round(step, 4)
 
             # Adjust rods (direction corrected)
-            if self.period > 1000:
-                if real_pwr > goal_pwr:
-                    # Power too high → insert rods (INCREASE rods_pos)
-                    new_pos = min(1.0, self.period/2000 * (self.rods_pos - step))
-                    self.move_rods(new_pos)
-                else:
-                    # Power too low → withdraw rods (DECREASE rods_pos)
-                    new_pos = max(0.0, self.rods_pos + step)
-                    self.move_rods(new_pos)
+            if real_pwr > goal_pwr:
+                # Power too high → insert rods (INCREASE rods_pos)
+                new_pos = min(1.0, self.rods_pos - step)
+                self.move_rods(new_pos)
+            else:
+                # Power too low → withdraw rods (DECREASE rods_pos)
+                new_pos = max(0.0, self.rods_pos + step)
+                self.move_rods(new_pos)
 
     def check_SCRAM(self, cond_on, cond_off=False):
         """
@@ -520,14 +519,14 @@ class ReactorSystems:
 
             # Equalise volume of coolant
             v1 = (self.volA_1 + self.volA_2) / 2
-            if self.volA_1 >= self.volA_2:
-                # This should be smooth, eq_k is a guess, ADJUST
-                self.volA_1 -= self.eq_k * (v1 - self.volA_1)
-                self.volA_2 += self.eq_k * (v1 - self.volA_2)
-            else:
-                # This should be smooth, eq_k is a guess, ADJUST
-                self.volA_1 += self.eq_k * (v1 - self.volA_1)
-                self.volA_2 -= self.eq_k * (v1 - self.volA_2)
+            # if self.volA_1 >= self.volA_2:
+            # This should be smooth, eq_k is a guess, ADJUST
+            self.volA_1 += self.eq_k * (v1 - self.volA_1)
+            self.volA_2 += self.eq_k * (v1 - self.volA_2)
+            # else:
+            #     # This should be smooth, eq_k is a guess, ADJUST
+            #     self.volA_1 += self.eq_k * (v1 - self.volA_1)
+            #     self.volA_2 += self.eq_k * (v1 - self.volA_2)
             
             # Launch or stop pumpA
             if not self.marker_pumpA == self.pumpA:
@@ -657,8 +656,8 @@ class ReactorSystems:
 
         # Simulate heat transfer through steam condenser
         if self.tempB_1 < self.tempA_2:
-            self.tempB_1 += 0.8 * dT  # 80% efficiency of intended heat transfer
-            self.tempA_2 -= 0.8 * dT
+            self.tempB_1 += dT
+            self.tempA_2 -= dT
         else:
             self.tempB_1 += 0.1 * dT  # 10 % efficiency of unintended heat transfer
             self.tempA_2 -= 0.1 * dT
@@ -806,20 +805,23 @@ class ReactorSystems:
             self.flow_from_A_4 = self.MAX_FLOW_A_4 * (1 - self.pressA_2 / self.MAX_PRESSURE)  # Maximum flow when ambient pressure
             dV_out = self.flow_from_A_4 * self.time_step
 
-            if self.vlvA_4:
+            if self.volA_2 + dV_out <= self.VOLUME_A_2 and self.volA_4 - dV_out >= 0:
                 self.volA_2 += dV_out
                 self.volA_4 -= dV_out
 
-                # Equalise temperatures
-                w1 = self.volA_2 / (self.volA_2 + self.volA_4)
-                w2 = self.volA_4 / (self.volA_2 + self.volA_4)
+            # Equalise temperatures
+            w1 = self.volA_2 / (self.volA_2 + self.volA_4)
+            w2 = self.volA_4 / (self.volA_2 + self.volA_4)
+            if self.vlvB_4 and self.pumpB_4:
+                temp1 = (w1 * self.tempA_2 + w2 * self.tempB_2)  # Refilling reserve tank from B_2
+            else:
                 temp1 = (w1 * self.tempA_2 + w2 * self.temp_ambient)  # Reserve water tank has ambient temperature
-                self.tempA_2 += self.eq_k * (temp1 - self.tempA_2)
-                # No need to calculate temperature in reserve tank
+            self.tempA_2 += self.eq_k * (temp1 - self.tempA_2)
+            # No need to calculate temperature in reserve tank
 
             if self.volA_4 < 0:
                 self.volA_4 = 0
-                self.flow_4 = 0
+                self.flow_from_A_4 = 0
 
             # Simple level change based on flows
             if self.pumpB_4 and self.vlvB_4:
@@ -831,21 +833,24 @@ class ReactorSystems:
                         self.delay_count_pumpB_4 += 1
 
                         # Should create gradual change in flow
-                        self.flow_from_A_4 += self.pumpB_4_nom_flow / self.delay_pumpB_4
+                        self.flow_to_A_4 += self.pumpB_4_nom_flow / self.delay_pumpB_4
                         if self.delay_count_pumpB_4 >= self.delay_pumpB_4:
                             self.marker_pumpB_4 = True
 
                     elif self.pumpB_4 == False:
 
                         delay_count_pumpB_4 -= 1
-                        self.flowA -= self.pumpB_4_nom_flow / self.delay_pumpB_4
-                        if self.delay_count_pumpA <= 0:
-                            self.marker_pumpA = False
+                        self.flow_to_A_4 -= self.pumpB_4_nom_flow / self.delay_pumpB_4
+                        if self.delay_count_pumpB_4 <= 0:
+                            self.marker_pumpB_4 = False
 
                 dV_in = self.flow_to_A_4 * self.time_step
-                if self.volA_4 <= self.VOLUME_A_4 + dV_in and self.pumpB_4:
-                    self.flow_to_A_4 = self.pumpB_4_nom_speed
+                if self.volA_4 + dV_in <= self.VOLUME_A_4 and self.pumpB_4:
+                    self.flow_to_A_4 = self.pumpB_4_nom_flow
                     self.volA_4 += dV_in  # Reserve tank filled from lake
+                elif self.volA_4 + dV_in > self.VOLUME_A_4:
+                    self.volA_4 = self.VOLUME_A_4  # Tank full
+                    self.flow_to_A_4 = 0
 
     def update_relief(self):
         """
@@ -882,7 +887,12 @@ class ReactorSystems:
 
         # Empty relief tank
         if self.vlv_empty_relief:
-            self.vol_relief -= self.MAX_RELIEF_FLOW * self.time_step
+            dV = self.MAX_RELIEF_FLOW * self.time_step
+
+            if self.vol_relief > dV:
+                self.vol_relief -= self.MAX_RELIEF_FLOW * self.time_step
+            else:
+                self.vol_relief = 0
 
     def autopilot(self):
         """
@@ -1089,8 +1099,11 @@ NUM_COLS_1602 = 16
 buzzer_freq = 3000  # 3 kHz
 buzzer = PWM(Pin(27), buzzer_freq, duty=0)
 
+# Backlight switch
+backlight_sw = Pin(34, Pin.IN)
+
 # Button matrix pins
-cols = [Pin(14, Pin.OUT), Pin(15, Pin.OUT), Pin(33, Pin.OUT), Pin(32, Pin.OUT), Pin(21, Pin.OUT)]
+cols = [Pin(14, Pin.OUT), Pin(15, Pin.OUT), Pin(33, Pin.OUT), Pin(32, Pin.OUT), Pin(0, Pin.OUT)]
 rows = [Pin(2, Pin.IN, Pin.PULL_UP), Pin(4, Pin.IN, Pin.PULL_UP),
     Pin(5, Pin.IN, Pin.PULL_UP), Pin(12, Pin.IN, Pin.PULL_UP), Pin(13, Pin.IN, Pin.PULL_UP)]
 
@@ -1118,9 +1131,9 @@ reactor.initial_power = 10.0
 is_alarm_init = False
 is_alarm_off = False  # Used to handle alarm off button
 last_alarm_toggle = 0
-period_scram_warning = False  # Used to trigger SCRAM after period is < reactor.period_threshold for 2 cycles
-# scram_cond used to trigger shutdown and prevent rod movement during it
-scram_cond = (period_scram_warning and reactor.period < reactor.period_threshold) or sys.temp_core > 600 or reactor.is_scram
+# period_scram_warning = False  # Used to trigger SCRAM after period is < reactor.period_threshold for 2 cycles
+# # scram_cond used to trigger shutdown and prevent rod movement during it
+# scram_cond = (period_scram_warning and reactor.period < reactor.period_threshold) or sys.temp_core > 600 or reactor.is_scram
 is_alarm_sound = False  # Used to create alternating alarm sound
 is_autopilot_rods = False
 power_autopilot_rods = 500.0
@@ -1222,6 +1235,14 @@ def handle_switches(switch_states: list):  # Rename to update_switch
         elif switch_states[4][4]:
             reactor.move_rods(0)  # Rods down
 
+    # Backlight switch
+    if backlight_sw.value() == 1:
+        lcd_2004.no_backlight()
+        lcd_1602.no_backlight()
+    else:
+        lcd_2004.backlight()
+        lcd_1602.backlight()
+
 
 def scan_switches(cols: list, rows: list):
     """
@@ -1271,15 +1292,15 @@ while True:
     scan_switches(cols, rows)  # Handle switches
     handle_switches(switch_states)
     
-    if period_scram_warning and reactor.period < reactor.period_threshold:
-        reactor.is_scram = True
-    else:
-        period_scram_warning = False
+    # if period_scram_warning and reactor.period < reactor.period_threshold:
+    #     reactor.is_scram = True
+    # else:
+    #     period_scram_warning = False
     
-    if reactor.period < reactor.period_threshold:
-        period_scram_warning = True
-    else:
-        period_scram_warning = False
+    # if reactor.period < reactor.period_threshold:
+    #     period_scram_warning = True
+    # else:
+    #     period_scram_warning = False
     
     reactor.check_SCRAM(reactor.is_scram)
 
@@ -1288,6 +1309,15 @@ while True:
     if not scram_cond:
         is_alarm_init = False
         is_alarm_off = False
+
+    if sys.catastrophe_log == "":
+            log_msg_1602 = "No faults"
+    elif not is_alarm_off:
+        log_msg_1602 = sys.catastrophe_log
+        is_alarm_init = True
+    else:
+        sys.catastrophe_log = ""
+        log_msg_1602 = "No faults"
 
     if scram_cond:
         is_alarm_init = True
@@ -1371,15 +1401,6 @@ while True:
 #                 log_msg_count += 1
 #                 if log_msg_count > len(sys.catastrophe_log) - 1:
 #                     log_msg_count = 0
-        
-        if sys.catastrophe_log == "":
-            log_msg_1602 = "No faults"
-        elif not is_alarm_off:
-            log_msg_1602 = sys.catastrophe_log
-            is_alarm_init = True
-        else:
-            sys.catastrophe_log = ""
-            log_msg_1602 = "No faults"
 
         autopilot_msg = f"A/P:{power_autopilot_rods:.1f}"
         
@@ -1389,7 +1410,7 @@ while True:
         lcd_1602.print(format_float(reactor.rods_pos * 100, 4) + '%')  # Also print rods_pos in percent
         last_refreshed = 0
     
-#     print(str(switch_states))  # For debugging
+    print(str(switch_states))  # For debugging
 
     time_elapsed = time.time() - time_start
     time_now += time_elapsed
@@ -1398,5 +1419,5 @@ while True:
 
     time.sleep_ms(1)
     
-    print(is_alarm_init)
+    # print(is_alarm_init)
 
