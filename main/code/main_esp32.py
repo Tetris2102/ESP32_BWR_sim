@@ -198,20 +198,20 @@ class ReactorCore:
             step = self.rods_step + (max_step - self.rods_step) * normalized_diff
             step = round(step, 4)
 
-            # Adjust rods (direction corrected)
+            # Adjust rods
             if real_pwr > goal_pwr:
-                # Power too high → insert rods (INCREASE rods_pos)
+                # Power too high => insert rods (DECREASE rods_pos)
                 new_pos = min(1.0, self.rods_pos - step)
                 self.move_rods(new_pos)
             else:
-                # Power too low → withdraw rods (DECREASE rods_pos)
+                # Power too low => withdraw rods (INCREASE rods_pos)
                 new_pos = max(0.0, self.rods_pos + step)
                 self.move_rods(new_pos)
 
     def check_SCRAM(self, cond_on, cond_off=False):
         """
         Checks for and handles SCRAM using given conditions
-        for initiating and finishing SCRAM
+        for initiating and deactivating SCRAM
         """
 
         if cond_on or self.is_scram:
@@ -770,7 +770,7 @@ class ReactorSystems:
         if not self.vlvB_2:
             if self.pressB_1 > 1000 and self.vlvB_main:
 
-                press_drop = 0.8 * (self.pressB_1 - self.pressB_2)
+                press_drop = self.pressB_1 - self.pressB_2
                 new_power_turbine = press_drop / self.normal_press_drop_turbine
                 dP = self.power_turbine - new_power_turbine
 
@@ -1278,7 +1278,6 @@ buzzer.duty(0)
 while True:
 
     while is_paused:
-        # REPLACE "TIME BOOST" BUTTON WITH "PAUSE" SWITCH TO AVOID COMPLICATED AND UNRELIABLE LOGIC HERE
         scan_switches(cols, rows)
         handle_switches(switch_states)
         time.sleep_ms(100)
@@ -1291,16 +1290,6 @@ while True:
     # Handle switches
     scan_switches(cols, rows)  # Handle switches
     handle_switches(switch_states)
-    
-    # if period_scram_warning and reactor.period < reactor.period_threshold:
-    #     reactor.is_scram = True
-    # else:
-    #     period_scram_warning = False
-    
-    # if reactor.period < reactor.period_threshold:
-    #     period_scram_warning = True
-    # else:
-    #     period_scram_warning = False
     
     reactor.check_SCRAM(reactor.is_scram)
 
@@ -1338,7 +1327,6 @@ while True:
         is_alarm_sound = False
     
     if is_autopilot_rods and not scram_cond:
-#         print("autopilot on")  # For debugging
         reactor.autopilot(goal_pwr=power_autopilot_rods)
 
     # Render display menu
@@ -1418,6 +1406,3 @@ while True:
     time_start = time.time()
 
     time.sleep_ms(1)
-    
-    # print(is_alarm_init)
-
